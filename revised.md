@@ -12,6 +12,102 @@ Secondary sources of complexity—including abstract types, configurable static 
 
 Through detailed examples drawn from real-world use cases involving shape calculations, database interactions, and application service architectures, we illustrate how CGP patterns can coexist with classical Rust patterns. This hybrid strategy, termed "incremental fission," offers a pragmatic path forward for organizations seeking to leverage CGP's benefits without wholesale code base rewrites.
 
+## Table of Contents
+
+1. **Foundations: Defining Context-Generic Programming**
+   - Context polymorphism and code reuse
+   - The role of generics in achieving context polymorphism
+   - Distinguishing CGP from alternative polymorphic approaches
+
+2. **The Spectrum of Context-Polymorphic Code**
+   - Dynamic dispatch and trait objects
+   - The impl trait bridge
+   - Generic functions and their ergonomic trade-offs
+   - Blanket trait implementations
+   - CGP components and configurable dispatch
+   - Functional programming and plain functions
+
+3. **The Three Pillars of CGP Benefits**
+   - Dependency injection of values through getter methods
+   - Dependency injection of types through abstract types
+   - Configurable static dispatch and type-level tables
+
+4. **Fusion versus Fission: A New Conceptual Framework**
+   - Defining fusion-driven development
+   - Defining fission-driven development
+   - The philosophical divergence between paradigms
+
+5. **The Landscape of Fusion-Driven Patterns**
+   - Enums and sum types
+   - Feature flags and conditional compilation
+   - Dynamic dispatch through trait objects
+   - Generic struct parameters
+   - Context-specific code
+   - Trait implementation on concrete types
+
+6. **Fission-Driven Patterns Across Languages**
+   - Duck typing in dynamic languages
+   - Inheritance and subtyping in object-oriented programming
+   - Runtime reflection and type erasure
+   - Algebraic effects in functional programming
+   - CGP's unique position in the design space
+
+7. **Why Rust Embraces Fusion**
+   - Language design constraints limiting fission patterns
+   - Cultural resistance to object-oriented and dynamic typing
+   - The success of reflection-based frameworks
+   - The cognitive comfort of monolithic contexts
+
+8. **The Adoption Dilemma**
+   - The chicken-and-egg problem of multiple contexts
+   - Forward compatibility in monolithic contexts
+   - The difficulty of transitioning from fusion to fission
+   - Addressing the perception of vendor lock-in
+
+9. **Primary Complexity: The Multi-Context Requirement**
+   - The unavoidable necessity of multiple contexts
+   - Subjective versus objective complexity assessment
+   - The cost of initial adoption
+   - Accepting necessary complexity
+
+10. **Taming Secondary Complexity: Abstract Types**
+    - The cognitive overhead of heavy generic usage
+    - Strategies for minimizing abstract type proliferation
+    - Trade-offs between type safety and simplicity
+
+11. **Taming Secondary Complexity: Configurable Static Dispatch**
+    - Understanding type-level lookup tables
+    - When to use provider traits versus direct implementation
+    - Balancing reusability with cognitive overhead
+
+12. **Taming Secondary Complexity: Getter Traits**
+    - The perception of magical automation
+    - Manual implementation versus derived traits
+    - Trade-offs between boilerplate and explicitness
+
+13. **Fusion-Fission Hybrids: Practical Integration Strategies**
+    - Using classical trait implementations with CGP
+    - Generic structs versus multiple contexts
+    - Strategic application of enums and dynamic dispatch
+    - Preventing the combinatorial explosion of contexts
+
+14. **Functional Context-Generic Programming**
+    - Higher-order providers and composition
+    - The tension between functional and object-oriented design
+    - Monolithic traits versus single-method traits
+    - The ergonomic advantages of CGP over traditional higher-order functions
+
+15. **Incremental Fission: A Pragmatic Adoption Strategy**
+    - Identifying candidates for context splitting
+    - Precision refactoring of monolithic traits
+    - Gradual transition from fusion to fission mindset
+    - Balancing stability with flexibility
+
+16. **Conclusions and Recommendations**
+    - Summary of key findings
+    - Practical guidelines for CGP adoption
+    - Future directions for research and development
+
 ---
 
 ## Chapter 1: Foundations: Defining Context-Generic Programming
