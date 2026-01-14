@@ -743,49 +743,6 @@ where
 
 Each trait declares precisely the abstract types it needs, and implementations can depend on other traits without needing to know about or mention the abstract types those traits use internally. The `CanRender` implementation depends on `CanCalculateArea`, which in turn depends on `HasScalarType`, but the `CanRender` trait itself does not need to mention `Scalar` because it does not directly use that type.
 
-Abstract types also provide a natural way to define families of related types that must be used consistently throughout a context. For example, in a database abstraction, we might want to ensure that the connection type, transaction type, and query result type are all compatible with each other:
-
-````rust
-use cgp::prelude::*;
-
-#[cgp_type]
-pub trait HasDatabaseTypes {
-    type Connection;
-    type Transaction;
-    type QueryResult;
-}
-
-pub trait CanQueryDatabase: HasDatabaseTypes + HasErrorType {
-    fn query(&self, sql: &str) -> Result<Self::QueryResult, Self::Error>;
-}
-
-pub trait CanBeginTransaction: HasDatabaseTypes + HasErrorType {
-    fn begin_transaction(&self) -> Result<Self::Transaction, Self::Error>;
-}
-````
-
-A concrete context implementing these traits must provide consistent type definitions that work together, but the trait definitions themselves remain clean and focused on the operations they provide rather than the types those operations work with.
-
-The wiring of abstract types to concrete types happens at the context level using the `delegate_components!` macro with the `UseType` provider:
-
-````rust
-use cgp::prelude::*;
-
-pub struct Application {
-    // fields
-}
-
-delegate_components! {
-    Application {
-        ScalarTypeProviderComponent: UseType<f64>,
-        ErrorTypeProviderComponent: UseType<anyhow::Error>,
-        CoordinateTypeProviderComponent: UseType<i32>,
-    }
-}
-````
-
-This wiring establishes that `Application` uses `f64` as its scalar type, `anyhow::Error` as its error type, and `i32` as its coordinate type, allowing all context-generic code depending on these abstract types to work with `Application` without requiring those types to be threaded through as generic parameters.
-
 The abstract types pattern reveals an important insight about the nature of generic programming: not all type parameters represent true degrees of freedom that should be exposed at every level of abstraction. Many types are effectively configuration decisions that should be established once for a context and then implicitly available throughout the code working with that context. Abstract types provide a mechanism for distinguishing between these two classes of generic types, allowing type-level configuration to be centralized in the context definition while preserving the flexibility to have different contexts make different configuration choices.
 
 ## Configurable Static Dispatch and Type-Level Tables
@@ -1522,39 +1479,6 @@ The viral nature of reflection-based architectures also creates a form of lock-i
 Despite these significant limitations, reflection has proven valuable enough that many languages are expanding rather than contracting their reflection capabilities. Go added reflection support specifically to enable frameworks like encoding/json to work with arbitrary types. Rust is actively developing improved reflection capabilities to better support use cases like Bevy. C++ is considering adding standardized reflection facilities after decades of relying on preprocessing tricks and template metaprogramming. This continued investment demonstrates that developers consistently encounter scenarios where fission-driven patterns enabled by reflection provide value that justifies the costs.
 
 The success of reflection-based frameworks also reveals an important insight about developer psychology regarding fission-driven development. Developers who resist CGP due to its unfamiliarity with generic programming and trait bounds often enthusiastically adopt reflection-based frameworks despite their runtime costs and reduced type safety. This suggests that the resistance to CGP stems not from opposition to fission-driven patterns per se, but rather from unfamiliarity with achieving fission through compile-time techniques. The type-erased runtime dispatch of reflection feels closer to dynamic typing that many developers learned first, making it more comfortable despite being less performant and less safe than CGP's compile-time approach.
-
-## Algebraic Effects in Functional Programming
-
-Advanced functional programming languages have developed their own sophisticated approach to fission-driven development through algebraic effect systems, which provide a principled way to abstract over computational effects like state manipulation, IO operations, and error handling. While algebraic effects might seem distant from CGP at first glance, they share fundamental similarities in how they enable code to work polymorphically across different contexts by abstracting over capabilities rather than concrete implementations.
-
-An algebraic effect system allows defining effect interfaces that specify operations without implementation, similar to how CGP defines consumer traits that specify methods without concrete implementations. For example, in a language with algebraic effects, we might define a database effect:
-
-```ocaml
-effect Query : string -> row
-effect BeginTransaction : unit -> transaction
-```
-
-Code that performs database operations can be written against these effect declarations without knowing how they will be handled:
-
-```ocaml
-let query_user user_id =
-  let row = perform (Query ("SELECT * FROM users WHERE id = ?", user_id)) in
-  User.from_row row
-```
-
-The fission-driven property emerges when we provide effect handlers that implement these operations differently for different contexts. A production context might handle the `Query` effect by executing actual SQL queries against a database, while a test context might handle it by returning mock data from an in-memory store. A logging context might wrap another handler to record all queries. Crucially, the `query_user` function remains unchanged regardless of which handlers are installed—it is purely context-generic, working with any context that provides the required effects.
-
-The correspondence between algebraic effects and CGP becomes clearer when we examine how both patterns achieve fission. In CGP, we define consumer traits that specify required capabilities, implement provider traits that satisfy those capabilities, and use delegation to wire providers to contexts. In effect systems, we define effect operations that specify required capabilities, implement effect handlers that perform those operations, and install handlers dynamically to provide implementation. Both patterns separate interface from implementation, enable multiple implementations to coexist, and allow context-generic code to depend only on required capabilities rather than concrete contexts.
-
-However, algebraic effects provide additional power beyond what CGP currently offers, particularly in how they handle control flow. Effect handlers can choose whether to invoke the continuation zero times (aborting execution), once (normal execution), or multiple times (backtracking or parallelism). This enables expressing patterns like exception handling (zero invocations), transactions (with rollback), and non-deterministic computation that would be difficult to represent through CGP's trait-based approach. The ability to capture and manipulate continuations makes algebraic effects a more general abstraction than CGP's dependency injection patterns.
-
-Despite their theoretical elegance and power, algebraic effect systems have not achieved widespread adoption in mainstream programming, remaining primarily in research languages and advanced functional programming environments. The primary barrier is conceptual complexity—understanding continuations, delimited control, and the interaction between multiple effect handlers requires substantial background in programming language theory that many practitioners lack. Even experienced functional programmers report difficulty reasoning about code that uses effect systems extensively, particularly when multiple handlers interact or when handlers themselves perform effects.
-
-Performance considerations also limit algebraic effect adoption. The most straightforward implementations of effect handlers require runtime indirection similar to exception handling, with the potential for significant overhead when effects are performed frequently. More sophisticated implementations using CPS transformation or selective CPS can recover performance approaching direct code, but at the cost of implementation complexity and potential code size explosion. The tension between expressiveness and performance mirrors the trade-offs between dynamic dispatch and compile-time specialization that we have seen in other fission-driven patterns.
-
-Comparing algebraic effects with CGP reveals an interesting design space trade-off. Algebraic effects prioritize maximum expressiveness, enabling patterns that would be impossible in CGP at the cost of conceptual and implementation complexity. CGP prioritizes pragmatic utility and performance, providing the fission-driven patterns that emerge in most practical programming scenarios through compile-time techniques that developers with basic understanding of generics can comprehend. For the subset of effects that map naturally to dependency injection patterns—which represents the majority of real-world use cases—CGP arguably provides simpler semantics and better performance than effect systems, while remaining compositional and type-safe.
-
-The existence of algebraic effects also provides theoretical validation for CGP's approach. If advanced functional programming languages independently converged on patterns that separate capability interfaces from implementations and enable context-polymorphic code, this suggests that these patterns address fundamental software engineering challenges rather than being arbitrary design choices. The difference is that CGP brings these patterns to Rust through final encoding and generics rather than through runtime effect handling, making them more approachable to developers without functional programming backgrounds while maintaining the zero-cost abstraction principle that Rust prioritizes.
 
 ## CGP's Unique Position in the Design Space
 
