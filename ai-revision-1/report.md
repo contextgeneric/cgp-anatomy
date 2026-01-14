@@ -2559,5 +2559,3 @@ The framework of fusion versus fission provides language for having these evalua
 For the Rust ecosystem broadly, fission-driven pattern emergence through CGP and reflection-based frameworks represents important evolution. While Rust's fusion-driven defaults serve many use cases well, robust fission alternative absence has created friction for developers from other language backgrounds and applications with inherent multi-context requirements. As fission-driven patterns mature and appropriate use cases become better understood, the Rust ecosystem can support broader architectural style ranges while maintaining the language's core safety, performance, and explicitness values.
 
 The journey from fusion to fission-driven thinking is not one every Rust developer needs taking, nor one undertaken lightly. But for those facing challenges fission patterns address, understanding Context-Generic Programming's anatomy—its benefits, costs, and philosophical shifts it represents—provides foundations for making informed decisions and executing successful adoption when appropriate.
-
----

@@ -21,7 +21,40 @@ At its core, these alternative paradigms achieve code reuse largely in the form 
 
 ## Example Context-Polymorphic Code
 
-With the definition in place, let's look at a few example code that are context-polymorphic:
+With the definition in place, let's look at a few example code that are context-polymorphic. Suppose we want to reuse the area calculation for multiple rectangle contexts, such as:
+
+```rust
+pub struct PlainRectangle {
+    pub width: f64,
+    pub height: f64,
+}
+
+pub struct RectangleIn2dSpace {
+    pub width: f64,
+    pub height: f64,
+    pub x: f64,
+    pub y: f64,
+}
+
+pub struct RectangleIn3dSpace {
+    pub width: f64,
+    pub height: f64,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+```
+
+We can define a getter trait like `RectangleFields`:
+
+```rust
+pub trait RectangleFields {
+    fn width(&self) -> f64;
+    fn height(&self) -> f64;
+}
+```
+
+and then write context-polymorphic code on the rectangle contexts as follows:
 
 ### Dyn Trait
 
@@ -278,17 +311,31 @@ To better describe the two approaches, we can say that classical Rust design pat
 
 This fundamental difference in philosophy is the main tension that separates CGP from classical programming. CGP only really brings benefits when there are at least two concrete contexts, and works better as the number of contexts increases. On the other hand, classical programming patterns work best when there can only be one concrete context, and introduces strong friction to prevent alternative contexts from being defined.
 
-### Correspondance to Initial vs Final Encoding
-
-The juxtaposition between fusion-driven development and fission-driven development has a deep correspondance to the theoretical foundation of initial vs final encoding.
-
-Fusion-driven development makes use of initial encoding techniques to group distinct types together in the form of enums or type-erased values such as `Any`, `dyn` traits, or existential types. On the other hand, fision-driven development make use of final encoding techniques to reuse code across distinct types in the form of generics and typeclass constraints.
-
 ### Fusion-Driven Patterns
 
 Here are some example fusion-driven patterns in Rust:
 
 #### Enum
+
+```rust
+pub enum AnyCoord {
+    NoCoord,
+    TwoDimension {
+        x: f64,
+        y: f64,
+    },
+    ThreeDimension {
+        x: f64,
+        y: f64,
+    },
+}
+
+pub struct Rectangle {
+    pub width: f64,
+    pub height: f64,
+    pub coords: AnyCoord,
+}
+```
 
 ```rust
 pub enum AnyDatabase {
@@ -413,25 +460,9 @@ While reflection is very powerful, it requires sacrificing a large part of stati
 
 Although reflection may have less cognitive overhead than the generic approach, it nevertheless has some viral effect that affect the code base in similar ways as CGP. It is just that instead of working with a generic context, reflection-based fission code need to work with a type-erased context. This would still require a large part of the code base to be designed to work with this type-erased context. But this brings less anxiety to developers, because this style of code look similar to dynamic-typed code that is already familiar to many developers.
 
-#### Algebraic Effects
-
-Even functional programming has well-supported fission-driven patterns. Although functional programming tend to lack features such as dynamic typing and reflection, they are compensated by equally powerful features like existential types, GADTs, and initial encoding.
-
-Most notably, advanced functional applications tend to use fee monad and algebraic effects to abstractly represent the effects and operations that a code has performed.
-
-Although there is no explicit context type in algebraic effects, we can think of the canonical context type being the environment type that is typically found in a reader monad, or a reader effect. Application-specific effect handlers tend to use the reader effect to retrieve parameters from this implicit context, such as the database config, to handle an effectful operation such as database query.
-
-The fission-property of algebraic effects can also be achieved through getter effects, which bear similarity to getter methods in CGP. For example, instead of using the reader effect to get a concrete context that contains a database config field, an effect handler can depend on a getter effect like `get_database_config` to treat the act of getting the database config field as an effectful operation.
-
-Algebraic effects offer a more advanced form of fission-driven development, because it allows the code to work not only with any context, but also with any effect.
-
-In comparison, CGP is less powerful than algebraic effects, but also simpler. Without an effect system, one can't use CGP to emulate advanced effect manipulation of the continuation, such as calling the continuation zero or multiple times. However, when it comes to simple effects like reader or getter effects, or for application-specific effects that always handled by calling the continuation once, CGP arguably provide simpler semantics and ergonomics in handling them.
-
-Moreover, since algebraic effects are based on initial encoding, existential types and GADTs, they are arguably still a form of type erasure that require runtime dispatch. On the other hand, since CGP is based on final encoding, it brings more advantage in terms of performance and simplicity of reasoning.
-
 #### Comparing CGP with other fission-driven patterns
 
-When comparing with other fission-driven development approaches, we can see that CGP is unique in how it enables fission-driven patterns through generics and final encoding.
+When comparing with other fission-driven development approaches, we can see that CGP is unique in how it enables fission-driven patterns through generics.
 
 ### Why Rust is fusion-driven
 
