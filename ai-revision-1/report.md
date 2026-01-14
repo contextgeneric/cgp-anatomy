@@ -403,12 +403,14 @@ However, true power emerges with contexts lacking direct structural corresponden
 
 ````rust
 #[derive(HasField)]
-pub struct LegacyRectangle {
+pub struct RectangleIn2dSpace {
     pub rect_width: f64,
     pub rect_height: f64,
+    pub x: f64,
+    pub y: f64
 }
 
-impl RectangleFields for LegacyRectangle {
+impl RectangleFields for RectangleIn2dSpace {
     fn width(&self) -> f64 { self.rect_width }
     fn height(&self) -> f64 { self.rect_height }
 }
@@ -431,43 +433,27 @@ For nested structures, delegation handles complexity transparently:
 
 ````rust
 #[derive(HasField)]
-pub struct Application {
-    pub rectangle_config: RectangleConfig,
+pub struct RectangleIn2dSpace {
+    pub rectangle: Rectangle,
+    pub x: f64,
+    pub y: f64,
 }
 
 impl RectangleFields for Application {
-    fn width(&self) -> f64 { self.rectangle_config.width }
-    fn height(&self) -> f64 { self.rectangle_config.height }
+    fn width(&self) -> f64 { self.rectangle.width }
+    fn height(&self) -> f64 { self.rectangle.height }
 }
 ````
 
 This getter-based approach provides advantages over alternatives. Trait objects achieve decoupling but incur virtual dispatch costs:
 
 ````rust
-pub trait RectangleDimensions {
-    fn width(&self) -> f64;
-    fn height(&self) -> f64;
-}
-
-pub fn rectangle_area(dims: &dyn RectangleDimensions) -> f64 {
-    dims.width() * dims.height()
+pub fn rectangle_area(context: &dyn RectangleFields) -> f64 {
+    context.width() * context.height()
 }
 ````
 
 Generic parameters without getter traits fail immediately—no mechanism exists to access values without trait bounds specifying how values are obtained, returning us to the need for getter traits.
-
-The pattern also provides clean separation between interface and implementation valuable for testing:
-
-````rust
-pub struct MockRectangle { width: f64, height: f64 }
-
-impl RectangleFields for MockRectangle {
-    fn width(&self) -> f64 { self.width }
-    fn height(&self) -> f64 { self.height }
-}
-````
-
-Mock contexts contain only fields necessary to satisfy specific dependencies, reducing test suite friction significantly.
 
 ### Dependency Injection of Types Through Abstract Types
 
@@ -1020,7 +1006,7 @@ However, inheritance encounters significant limitations explaining its declining
 
 Inheritance creates temporal coupling where derived classes must be defined after base classes, preventing third-party retroactive additions without modifying base definitions. Virtual method calls require runtime vtable indirection, preventing inlining and interprocedural optimization. The compiler's inability to know concrete types at call sites limits whole-program optimization, forcing conservative assumptions about possible derived classes.
 
-Despite limitations, inheritance-based fission remains dominant in enterprise development, particularly where virtual dispatch overhead is negligible compared to IO costs. Modern languages have attempted addressing inheritance limitations—default interface methods in Java 8, traits in Scala and Rust, extension methods in C#, protocol extensions in Swift. These features recognize that fission-driven patterns require more flexibility than classical inheritance provides, pointing toward alternative approaches like CGP's final encoding techniques.
+Despite limitations, inheritance-based fission remains dominant in enterprise development, particularly where virtual dispatch overhead is negligible compared to IO costs. Modern languages have attempted addressing inheritance limitations—default interface methods in Java 8, traits in Scala and Rust, extension methods in C#, protocol extensions in Swift. These features recognize that fission-driven patterns require more flexibility than classical inheritance provides, pointing toward alternative approaches like CGP.
 
 ### Runtime Reflection and Type Erasure
 
@@ -1047,7 +1033,7 @@ Despite significant limitations, reflection has proven valuable enough that many
 
 ### CGP's Unique Position in the Design Space
 
-Having surveyed fission-driven patterns across dynamic typing, object-oriented inheritance, and runtime reflection, we can articulate CGP's distinctive position. CGP represents a unique combination: achieving fission-driven development through compile-time generic programming and final encoding, providing zero-cost abstraction and strong type safety while enabling the extensibility and code reuse characterizing fission patterns in other languages.
+Having surveyed fission-driven patterns across dynamic typing, object-oriented inheritance, and runtime reflection, we can articulate CGP's distinctive position. CGP represents a unique combination: achieving fission-driven development through compile-time generic programming, providing zero-cost abstraction and strong type safety while enabling the extensibility and code reuse characterizing fission patterns in other languages.
 
 The compile-time nature of CGP's polymorphism is its most distinguishing characteristic. Where duck typing defers type checking to runtime, where inheritance requires vtable indirection, where reflection performs dynamic type inspection, CGP performs all type resolution and dispatch during compilation. Monomorphization generates specialized code for each concrete context eliminating all abstraction overhead, producing machine code comparable to hand-written implementations for specific types. This zero-cost abstraction makes CGP viable for performance-critical domains where other fission patterns would be unacceptable.
 
@@ -1079,7 +1065,7 @@ Rust's rejection of traditional object-oriented inheritance represents another d
 
 Yet inheritance brings problems motivating Rust's designers to exclude it. Coupling between base and derived classes makes code fragile, as base class implementation changes can break derived classes subtly. Multiple inheritance creates ambiguity about which parent implementation to use when multiple parents provide the same method. Inheritance hierarchy rigidity makes retroactively adding types to existing abstractions difficult without modifying base class definitions. Most problematically for Rust's goals, inheritance typically relies on virtual dispatch with associated performance costs and optimization barriers.
 
-By excluding both reflection and inheritance, Rust eliminated two primary mechanisms through which fission-driven development occurs in other languages. This left traits and generics as the primary abstraction mechanisms, which while powerful, require more explicit specification of type relationships and cannot achieve the same runtime flexibility reflection or inheritance provide. The trait system enables fission through final encoding—code generic over trait bounds can work with any type implementing those traits—but this fission comes with syntactic overhead and cognitive demands absent from languages where fission happens through runtime mechanisms.
+By excluding both reflection and inheritance, Rust eliminated two primary mechanisms through which fission-driven development occurs in other languages. This left traits and generics as the primary abstraction mechanisms, which while powerful, require more explicit specification of type relationships and cannot achieve the same runtime flexibility reflection or inheritance provide. The trait system enables fission through code generic over trait bounds can work with any type implementing those traits—but this fission comes with syntactic overhead and cognitive demands absent from languages where fission happens through runtime mechanisms.
 
 Coherence rules Rust imposes on trait implementations represent a third design constraint reinforcing fusion patterns. The orphan rule prevents implementing foreign traits for foreign types, ensuring adding dependencies cannot cause existing trait implementations to become ambiguous. The overlap rule prevents defining multiple trait implementations potentially applying to the same type, ensuring trait resolution is always unambiguous and can happen at compile time. These rules provide important guarantees about program behavior and enable optimization, but they also prevent certain fission patterns from working.
 
@@ -1095,7 +1081,7 @@ The backlash against inheritance and subtype polymorphism within the Rust commun
 
 When developers first encounter CGP and see blanket trait implementations providing functionality for any type satisfying certain trait bounds, some immediately perceive this as resembling inheritance hierarchies. The blanket implementation appears like a base class providing default implementations, and types implementing required traits seem like derived classes gaining functionality through inheritance. This superficial similarity can trigger visceral negative reactions from developers associating inheritance with problems they worked hard to escape by moving to Rust.
 
-However, this perception fundamentally misunderstands what CGP does and how it differs from inheritance. Inheritance creates tight coupling through shared implementation and state between base and derived classes, with derived classes depending on base class implementation details. CGP creates loose coupling through final encoding where types satisfy abstract requirements expressed through trait bounds, with implementations depending only on trait interfaces rather than concrete types. Inheritance requires types designed upfront as part of hierarchies, while CGP enables types to retroactively satisfy requirements without modification. The mechanisms and properties are fundamentally different, but visual similarity in code structure can obscure these differences to casual observers.
+However, this perception fundamentally misunderstands what CGP does and how it differs from inheritance. Inheritance creates tight coupling through shared implementation and state between base and derived classes, with derived classes depending on base class implementation details. CGP creates loose coupling where types satisfy abstract requirements expressed through trait bounds, with implementations depending only on trait interfaces rather than concrete types. Inheritance requires types designed upfront as part of hierarchies, while CGP enables types to retroactively satisfy requirements without modification. The mechanisms and properties are fundamentally different, but visual similarity in code structure can obscure these differences to casual observers.
 
 Resistance to dynamic typing patterns exhibits similar dynamics. Developers who have experienced debugging runtime type errors in dynamically typed languages, where mistakes only manifest when specific code paths execute with specific data, appreciate Rust's compile-time type checking catching errors before programs run. They value documentation type signatures provide about what values functions accept and return, making code easier to understand without executing it. They recognize how static typing enables refactoring tools to safely transform code and facilitates aggressive compiler optimization. These benefits make dynamic typing feel like a step backward toward chaos and uncertainty.
 
