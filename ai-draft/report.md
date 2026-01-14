@@ -492,16 +492,18 @@ However, the true power of getter-based dependency injection emerges when we con
 use cgp::prelude::*;
 
 #[derive(HasField)]
-pub struct LegacyRectangle {
+pub struct RectangleIn2dSpace {
     pub rect_width: f64,
     pub rect_height: f64,
+    pub x: f64,
+    pub y: f64
 }
 ````
 
-Without getter traits, adapting `LegacyRectangle` to work with code expecting width and height fields would require either refactoring the struct definition itself—potentially breaking existing code—or creating wrapper types and conversion functions that add boilerplate and runtime overhead. With getter-based dependency injection, we can satisfy the `RectangleFields` dependency by implementing the getter trait with the appropriate field mappings:
+Without getter traits, adapting `RectangleIn2dSpace` to work with code expecting width and height fields would require either refactoring the struct definition itself—potentially breaking existing code—or creating wrapper types and conversion functions that add boilerplate and runtime overhead. With getter-based dependency injection, we can satisfy the `RectangleFields` dependency by implementing the getter trait with the appropriate field mappings:
 
 ````rust
-impl RectangleFields for LegacyRectangle {
+impl RectangleFields for RectangleIn2dSpace {
     fn width(&self) -> f64 {
         self.rect_width
     }
@@ -512,7 +514,7 @@ impl RectangleFields for LegacyRectangle {
 }
 ````
 
-This manual implementation demonstrates that getter traits function as an adapter pattern at the type level, allowing contexts with incompatible structures to present a compatible interface to context-generic code. The blanket implementation of `RectangleArea` now works seamlessly with both `Rectangle` and `LegacyRectangle`, despite their structural differences, because both satisfy the `RectangleFields` dependency.
+This manual implementation demonstrates that getter traits function as an adapter pattern at the type level, allowing contexts with incompatible structures to present a compatible interface to context-generic code. The blanket implementation of `RectangleArea` now works seamlessly with both `Rectangle` and `RectangleIn2dSpace`, despite their structural differences, because both satisfy the `RectangleFields` dependency.
 
 The flexibility extends even further when we consider contexts that compute their dimensions dynamically rather than storing them as fields. Imagine a context representing a square, which stores only a single side length but needs to provide both width and height accessors:
 
@@ -540,40 +542,30 @@ The pattern becomes even more powerful when we consider contexts that need to pe
 use cgp::prelude::*;
 
 #[derive(HasField)]
-pub struct RectangleConfig {
-    pub width: f64,
-    pub height: f64,
-}
-
-#[derive(HasField)]
-pub struct Application {
-    pub rectangle_config: RectangleConfig,
-    pub other_field: String,
+pub struct RectangleIn2dSpace {
+    pub rectangle: Rectangle,
+    pub x: f64,
+    pub y: f64,
 }
 
 impl RectangleFields for Application {
     fn width(&self) -> f64 {
-        self.rectangle_config.width
+        self.rectangle.width
     }
 
     fn height(&self) -> f64 {
-        self.rectangle_config.height
+        self.rectangle.height
     }
 }
 ````
 
-The `Application` context satisfies `RectangleFields` by delegating to its nested `rectangle_config` field, demonstrating how getter traits enable context-generic code to remain decoupled from the organizational structure of concrete contexts. The `RectangleArea` implementation continues to work without modification, unaware that it is accessing a nested structure rather than direct fields.
+The `RectangleIn2dSpace` context satisfies `RectangleFields` by delegating to its nested `rectangle` field, demonstrating how getter traits enable context-generic code to remain decoupled from the organizational structure of concrete contexts. The `RectangleArea` implementation continues to work without modification, unaware that it is accessing a nested structure rather than direct fields.
 
 This getter-based approach to dependency injection provides several advantages over alternative patterns for achieving similar flexibility. Consider how one might attempt to achieve the same level of structural independence using trait objects with dynamic dispatch:
 
 ````rust
-pub trait RectangleDimensions {
-    fn width(&self) -> f64;
-    fn height(&self) -> f64;
-}
-
-pub fn rectangle_area(dims: &dyn RectangleDimensions) -> f64 {
-    dims.width() * dims.height()
+pub fn rectangle_area(context: &dyn RectangleFields) -> f64 {
+    context.width() * context.height()
 }
 ````
 
@@ -592,36 +584,6 @@ where
 ````
 
 This approach fails immediately because there is no way to access the width and height values without introducing trait bounds that specify how those values can be obtained—bringing us full circle back to the need for something like getter traits.
-
-The getter trait pattern also provides a clean separation between interface and implementation that proves valuable for testing and mocking. When writing unit tests for context-generic code that depends on `RectangleFields`, we can easily create minimal mock contexts that satisfy just the required dependencies:
-
-````rust
-pub struct MockRectangle {
-    pub width: f64,
-    pub height: f64,
-}
-
-impl RectangleFields for MockRectangle {
-    fn width(&self) -> f64 {
-        self.width
-    }
-
-    fn height(&self) -> f64 {
-        self.height
-    }
-}
-
-#[test]
-fn test_rectangle_area() {
-    let mock = MockRectangle {
-        width: 3.0,
-        height: 4.0,
-    };
-    assert_eq!(mock.rectangle_area(), 12.0);
-}
-````
-
-This mock context contains only the fields necessary to satisfy the `RectangleFields` dependency, without requiring the creation of a full application context with all its associated complexity. The ability to create lightweight mocks that satisfy specific dependency requirements significantly reduces the friction of writing comprehensive test suites for context-generic code.
 
 ## Dependency Injection of Types Through Abstract Types
 
