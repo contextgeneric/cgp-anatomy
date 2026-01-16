@@ -12,4 +12,6 @@ When writing each chapter, do not use the chapter number of title of the origina
 
 Before writing each chapter, write down detailed action items that list all the changes that you are going to make for that chapter based on the suggestions in review.md. If the review suggestion tells you to include content moved from other chapters, be sure to include that in your action list.
 
+After that, also write down a detailed outline of each sub-section in the chapter, before you start writing the chapter.
+
 After finishing every chapter, stop and wait for further instruction.
