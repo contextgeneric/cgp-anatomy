@@ -1277,8 +1277,7 @@ use cgp::prelude::*;
 pub trait CanProcessRequest:
     HasRequestType +
     HasResponseType +
-    HasErrorType +
-    HasConnectionType
+    HasErrorType
 {
     fn process_request(
         &self,
@@ -1313,45 +1312,17 @@ Using concrete types directly eliminates the abstract type traits and their asso
 A complementary strategy involves grouping related abstract types into type collections that vary together. Instead of separate abstract type traits for every component, define single traits providing all related types:
 
 ````rust
-use cgp::prelude::*;
-
 #[cgp_type]
-pub trait HasDatabaseTypes {
-    type Connection;
-    type Transaction;
-    type QueryResult;
+pub trait HasHttpTypes {
+    type Request;
+    type Response;
+    type Error;
 }
 ````
 
-This reduces the number of separate traits to understand and wire while making relationships between types more explicit. When developers see a context implementing `HasDatabaseTypes`, they immediately know it provides a complete collection of database-related types designed to work together, rather than needing to verify that separate connection, transaction, and query result types are compatible.
+This reduces the number of separate traits to understand and wire while making relationships between types more explicit. When developers see a context implementing `HasHttpTypes`, they immediately know it provides a complete collection of HTTP-related types designed to work together, rather than needing to verify that separate request, response, and error types are compatible.
 
 The trade-off is reduced flexibility—type collections make it awkward to customize only some types while using standard implementations for others. However, types that must interoperate closely are rarely customized independently, making this flexibility loss acceptable for the cognitive simplification gained.
-
-### Progressive Disclosure Through Trait Layering
-
-A third strategy structures traits to practice progressive disclosure, where simpler abstractions are introduced first and complex abstract types only revealed as necessary. Different system layers can work with different type dictionary subsets, with most code remaining unaware of full type complexity.
-
-Consider database abstraction where low-level code needs detailed type information but high-level business logic only needs basic capabilities:
-
-````rust
-use cgp::prelude::*;
-
-// Basic abstraction with minimal types
-pub trait CanQueryUsers: HasErrorType {
-    fn query_user(&self, user_id: &UserId) -> Result<User, Self::Error>;
-}
-
-// Detailed abstraction exposing transaction types
-pub trait CanManageTransactions:
-    HasTransactionType +
-    HasErrorType
-{
-    fn begin_transaction(&self) -> Result<Self::Transaction, Self::Error>;
-    fn commit_transaction(&self, tx: Self::Transaction) -> Result<(), Self::Error>;
-}
-````
-
-Business logic querying users can depend on `CanQueryUsers` without exposure to transaction or connection type complexity. Only code actually needing transaction control depends on the more complex traits exposing those types. This layering shields most code from full type dictionary complexity while keeping all capabilities available where needed.
 
 ### Trade-offs Between Type Safety and Simplicity
 
@@ -1360,11 +1331,9 @@ Abstract types represent a trade-off between type-level safety and conceptual si
 Consider error handling in a large application. The most type-safe approach uses abstract error types throughout:
 
 ````rust
-use cgp::prelude::*;
-
 #[cgp_type]
 pub trait HasErrorType {
-    type Error: std::error::Error;
+    type Error: Debug;
 }
 
 pub trait CanProcessData: HasErrorType {
@@ -1390,96 +1359,43 @@ The key insight is that abstract versus concrete type choice is not all-or-nothi
 
 ## Secondary Complexity: Configurable Static Dispatch
 
-Configurable static dispatch through type-level lookup tables represents CGP's most distinctive technical contribution, enabling multiple overlapping implementations to coexist and be selected per-context. However, this mechanism introduces concepts and syntax without direct parallels in standard Rust, creating learning barriers many developers find intimidating. The cognitive challenge stems from type-level tables transforming types into computational participants rather than passive classifications.
+Configurable static dispatch through type-level lookup tables represents CGP's most distinctive technical contribution, enabling multiple overlapping implementations to coexist and be selected per-context. However, this mechanism also represents CGP's most intimidating feature for newcomers, introducing concepts and syntax without direct parallels in standard Rust. The cognitive challenge stems from type-level tables transforming types into computational participants rather than passive classifications—a level of abstraction that many developers find disorienting when first encountered.
 
-When writing `delegate_components!` to wire contexts to providers, we construct type-level tables through `DelegateComponent` trait implementations. The macro generates an implementation where the component acts as lookup key and the provider becomes the associated type value. When code calls a method, framework-generated blanket implementations perform type-level lookups: querying the context's delegation table using the component as key, discovering the mapped provider, and dispatching to that provider's implementation.
+A crucial insight often missed during initial CGP adoption: **configurable dispatch is frequently unnecessary**. Many traits that appear in CGP codebases don't actually need the full machinery of provider traits and component wiring. Understanding when configurable dispatch provides genuine value versus when simpler patterns suffice represents a key skill for managing CGP's complexity effectively.
 
-This lookup happens entirely during compilation through Rust's associated type resolution. No runtime table exists—the "table" is purely a type system construct during compilation. Once type checking completes and monomorphization occurs, the compiler has resolved exactly which implementation to use for each call site, generating specialized code containing no remaining indirection.
+### Recognizing When Configurable Dispatch Is Unnecessary
 
-The cognitive challenge is that this process inverts typical type-behavior relationships developers have internalized. In conventional Rust, behavior follows directly from types—calling a method on `Rectangle` means looking at `Rectangle`'s `impl` blocks. With configurable dispatch, behavior is determined by following indirection chains: from context type to component key in lookup table to provider type implementing actual functionality. While resolved at compile time, this indirection requires maintaining more complex mental models.
-
-### When to Use Provider Traits Versus Direct Implementation
-
-Recognizing that configurable dispatch introduces genuine complexity raises the question: when is this complexity justified versus when should simpler patterns be preferred? The key insight is that configurable dispatch only provides value when multiple implementations of the same capability exist that different contexts might select between.
-
-Suppose we have defined a CGP component for area calculation with two providers: `RectangleArea` for rectangular contexts and `CircleArea` for circular contexts. If our codebase contains both types needing different calculations, configurable dispatch provides clear value. However, if examination reveals we only use rectangles and `CircleArea` was implemented speculatively but never used, the machinery provides no benefit.
-
-In this case, "downgrade" the component to a simple blanket trait:
+Consider a typical scenario where an application needs both production and testing contexts:
 
 ````rust
-pub trait HasArea {
-    fn area(&self) -> f64;
+pub struct ProductionApp {
+    pub database: Database,
+    pub api_client: AwsApiClient,
 }
 
-impl<Context> HasArea for Context
-where
-    Context: HasRectangleFields,
-{
-    fn area(&self) -> f64 {
-        self.width() * self.height()
-    }
+pub struct TestApp {
+    pub database: Database,
+    pub api_client: MockApiClient,
 }
 ````
 
-This simplified version eliminates component wiring while preserving all actually-used functionality. Any context implementing `HasRectangleFields` automatically gains `HasArea` through the blanket trait, with no explicit delegation required.
-
-The decision about whether to use configurable dispatch should be driven by concrete evidence of multiple implementations rather than speculative future needs. Following YAGNI, default to blanket traits initially, and only introduce configurable dispatch when a second implementation emerges needing to coexist with the first. This incremental approach prevents premature complexity while maintaining flexibility to introduce configurable dispatch later when requirements evolve.
-
-The transition from blanket trait to CGP component typically requires minimal code changes. The trait definition gains `#[cgp_component]`, the implementation becomes a provider with `#[cgp_impl]`, and contexts add `delegate_components!` entries. Core implementation logic remains unchanged, and code calling trait methods continues working without modification.
-
-### Balancing Trait Granularity
-
-Even when configurable dispatch is justified by multiple implementations existing, tension remains between maximizing code reuse through fine-grained providers and minimizing cognitive overhead by keeping component counts manageable. This manifests in decisions about factoring capabilities into components: should each small functionality be its own component, or should related capabilities group together even if that reduces selective configuration opportunities?
-
-Consider user management functionality needing separate operations for different user lifecycle actions. The maximally fine-grained approach defines separate components:
+Suppose we need to implement user querying and email sending functionality. The initial instinct when learning CGP might be to make everything configurable through provider traits:
 
 ````rust
 use cgp::prelude::*;
 
-#[cgp_component(UserGetter)]
+#[cgp_component(UserQuerier)]
 pub trait CanGetUser {
     fn get_user(&self, user_id: &UserId) -> Result<User>;
 }
 
-#[cgp_component(UserCreator)]
-pub trait CanCreateUser {
-    fn create_user(&self, email: &EmailAddress) -> Result<User>;
-}
-
-#[cgp_component(UserUpdater)]
-pub trait CanUpdateUser {
-    fn update_user(&self, user_id: &UserId, updates: UserUpdates) -> Result<()>;
-}
-
-#[cgp_component(UserDeleter)]
-pub trait CanDeleteUser {
-    fn delete_user(&self, user_id: &UserId) -> Result<()>;
+#[cgp_component(EmailSender)]
+pub trait CanSendEmail {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
 }
 ````
 
-This enables maximum flexibility—contexts could wire different providers for each operation. Perhaps read-only contexts only implement `CanGetUser`, while administrative contexts implement all four. However, each component adds cognitive overhead: additional wiring entries, additional trait bounds, additional indirection layers, additional configuration points to understand and maintain.
-
-The alternative groups related capabilities:
-
-````rust
-use cgp::prelude::*;
-
-#[cgp_component(UserServicesProvider)]
-pub trait HasUserServices {
-    fn get_user(&self, user_id: &UserId) -> Result<User>;
-    fn create_user(&self, email: &EmailAddress) -> Result<User>;
-    fn update_user(&self, user_id: &UserId, updates: UserUpdates) -> Result<()>;
-    fn delete_user(&self, user_id: &UserId) -> Result<()>;
-}
-````
-
-This coarser-grained approach reduces components and wiring entries, making configuration more manageable. However, it sacrifices flexibility—contexts cannot configure create/update/delete operations independently of read operations. A read-only context must still provide implementations for modification methods, even if they return errors or panic.
-
-Optimal granularity depends on actual variation patterns in the codebase. If read and write operations always vary together—real implementations use both while mocks use both mock versions—then coarser grouping better reflects problem structure. If contexts genuinely need different combinations—perhaps audit logging contexts need read-only access while administrative contexts need full CRUD—then fine-grained decomposition provides value by making these combinations expressible.
-
-Start with coarser-grained components and only split when concrete evidence emerges of contexts needing different configurations for grouped capabilities. This prevents premature decomposition while maintaining ability to refactor toward finer granularity as requirements evolve. The refactoring from coarse to fine is typically straightforward—split the trait, create separate providers, update wiring—making it safe to defer the split until actually needed.
-
-Consider implementing the grouped version generically:
+However, examining the actual requirements reveals an important distinction. User querying uses the `Database` type, which is identical across both contexts—both `ProductionApp` and `TestApp` contain the same `Database` type. The implementation logic doesn't vary between contexts; only the context structure differs. For this case, a simple blanket trait implementation suffices:
 
 ````rust
 use cgp::prelude::*;
@@ -1489,7 +1405,11 @@ pub trait HasDatabase {
     fn database(&self) -> &Database;
 }
 
-impl<Context> HasUserServices for Context
+pub trait CanGetUser {
+    fn get_user(&self, user_id: &UserId) -> Result<User>;
+}
+
+impl<Context> CanGetUser for Context
 where
     Context: HasDatabase,
 {
@@ -1505,175 +1425,323 @@ where
             created_at: row.get(3)?,
         })
     }
+}
+````
 
-    fn create_user(&self, email: &EmailAddress) -> Result<User> {
-        let user = User::new(email);
-        self.database().execute(
-            "INSERT INTO users (id, email, name, created_at) VALUES ($1, $2, $3, $4)",
-            &[&user.id, &user.email, &user.name, &user.created_at],
-        )?;
-        Ok(user)
-    }
+This blanket implementation automatically works with any context providing a `Database` through the `HasDatabase` getter trait. No configurable dispatch is needed because the implementation logic is genuinely generic—it works identically for all contexts that satisfy the simple requirement of providing database access.
 
-    fn update_user(&self, user_id: &UserId, updates: UserUpdates) -> Result<()> {
-        let mut query = String::from("UPDATE users SET ");
-        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
-        let mut param_count = 1;
+Email sending, by contrast, requires genuinely different implementations for different contexts. The production context sends real emails through AWS, while the test context records emails for later verification. This difference isn't about accessing different fields from the context structure—it's about fundamentally different behavior that cannot be expressed through a single generic implementation.
 
-        if let Some(ref email) = updates.email {
-            query.push_str(&format!("email = ${}, ", param_count));
-            params.push(email);
-            param_count += 1;
-        }
-        if let Some(ref name) = updates.name {
-            query.push_str(&format!("name = ${}, ", param_count));
-            params.push(name);
-            param_count += 1;
-        }
+### Direct Implementation: The Simpler Alternative
 
-        query.truncate(query.len() - 2); // Remove trailing ", "
-        query.push_str(&format!(" WHERE id = ${}", param_count));
-        params.push(user_id);
+When functionality requires context-specific implementations that aren't reused across multiple contexts, direct trait implementation often provides a simpler solution than configurable dispatch. The `CanSendEmail` trait can be implemented directly on each concrete context:
 
-        self.database().execute(&query, &params)?;
+````rust
+impl CanSendEmail for ProductionApp {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        self.api_client.send_email_via_aws(recipient, message)?;
         Ok(())
     }
+}
 
-    fn delete_user(&self, user_id: &UserId) -> Result<()> {
-        self.database().execute(
-            "DELETE FROM users WHERE id = $1",
-            &[user_id],
-        )?;
+impl CanSendEmail for TestApp {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        self.api_client.record_email_for_verification(recipient, message);
         Ok(())
     }
 }
 ````
 
-This blanket implementation provides all user services for any context with a database. The SQL queries are embedded directly in the implementation, showing the actual database operations being performed. If later evidence shows that read operations need to vary independently from write operations, the trait can be split:
+This direct approach eliminates the entire machinery of provider traits and component wiring. There are no provider structs to define, no `delegate_components!` blocks to write, and no type-level lookup tables to understand. The implementations are straightforward Rust code that any developer can read and modify without understanding CGP's internal mechanisms.
+
+Comparing this with the typical CGP approach using configurable dispatch highlights the complexity that direct implementation avoids:
 
 ````rust
-pub trait HasUserQueries {
+// The CGP way with provider traits:
+use cgp::prelude::*;
+
+#[cgp_component(EmailSender)]
+pub trait CanSendEmail {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
+}
+
+#[cgp_auto_getter]
+pub trait HasAwsApiClient {
+    fn aws_api_client(&self) -> &AwsApiClient;
+}
+
+#[cgp_auto_getter]
+pub trait HasMockApiClient {
+    fn mock_api_client(&self) -> &MockApiClient;
+}
+
+#[cgp_impl(new SendEmailWithAws)]
+impl<Context> EmailSender for Context
+where
+    Context: HasAwsApiClient,
+{
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        self.aws_api_client().send_email_via_aws(recipient, message)?;
+        Ok(())
+    }
+}
+
+#[cgp_impl(new MockSendEmail)]
+impl<Context> EmailSender for Context
+where
+    Context: HasMockApiClient,
+{
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        self.mock_api_client().record_email_for_verification(recipient, message);
+        Ok(())
+    }
+}
+
+delegate_components! {
+    ProductionApp {
+        EmailSenderComponent: SendEmailWithAws,
+    }
+}
+
+delegate_components! {
+    TestApp {
+        EmailSenderComponent: MockSendEmail,
+    }
+}
+````
+
+The provider-based approach introduces multiple additional constructs: the `EmailSenderComponent` type generated by `#[cgp_component]`, the provider structs `SendEmailWithAws` and `MockSendEmail`, additional getter traits for accessing the API clients, and the delegation wiring. All this machinery exists to solve a problem that doesn't exist in this scenario—there are no multiple implementations that need to be selected from or composed together.
+
+### When Configurable Dispatch Becomes Necessary
+
+The value of configurable dispatch emerges when multiple implementations of the same capability need to coexist within a single codebase, with different contexts potentially selecting different implementations. The key question is: **will this provider be reused across multiple contexts, or is each context likely to have its own unique implementation?**
+
+Suppose the email sending requirements evolve. The production application needs to send emails through different services based on user preferences—some users want AWS SES, others want SendGrid, and enterprise customers want direct SMTP. Additionally, there are multiple testing scenarios: some tests need to verify emails were sent, others need to simulate email failures, and integration tests might send to a local mail server.
+
+Now we genuinely have multiple implementations that different contexts might compose differently:
+
+````rust
+use cgp::prelude::*;
+
+#[cgp_component(EmailSender)]
+pub trait CanSendEmail {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
+}
+
+#[cgp_impl(new SendEmailWithAws)]
+impl<Context> EmailSender for Context
+where
+    Context: HasAwsApiClient,
+{
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        self.aws_api_client().send_email_via_aws(recipient, message)
+    }
+}
+
+#[cgp_impl(new SendEmailWithSendGrid)]
+impl<Context> EmailSender for Context
+where
+    Context: HasSendGridApiClient,
+{
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        self.sendgrid_api_client().send_email(recipient, message)
+    }
+}
+
+#[cgp_impl(new SendEmailWithSmtp)]
+impl<Context> EmailSender for Context
+where
+    Context: HasSmtpConnection,
+{
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        self.smtp_connection().send_message(recipient, message)
+    }
+}
+
+#[cgp_impl(new MockSendEmail)]
+impl<Context> EmailSender for Context
+where
+    Context: HasEmailRecorder,
+{
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        self.email_recorder().record_email(recipient, message);
+        Ok(())
+    }
+}
+
+#[cgp_impl(new FailingSendEmail)]
+impl<Context> EmailSender for Context {
+    fn send_email(&self, _recipient: &EmailAddress, _message: &str) -> Result<()> {
+        Err(Error::EmailServiceUnavailable)
+    }
+}
+````
+
+With multiple reusable providers available, different contexts can compose them as needed:
+
+````rust
+delegate_components! {
+    AwsProductionApp {
+        EmailSenderComponent: SendEmailWithAws,
+    }
+}
+
+delegate_components! {
+    SendGridProductionApp {
+        EmailSenderComponent: SendEmailWithSendGrid,
+    }
+}
+
+delegate_components! {
+    EnterpriseApp {
+        EmailSenderComponent: SendEmailWithSmtp,
+    }
+}
+
+delegate_components! {
+    StandardTestApp {
+        EmailSenderComponent: MockSendEmail,
+    }
+}
+
+delegate_components! {
+    FailureTestApp {
+        EmailSenderComponent: FailingSendEmail,
+    }
+}
+
+delegate_components! {
+    IntegrationTestApp {
+        EmailSenderComponent: SendEmailWithSmtp,
+    }
+}
+````
+
+Notice that multiple contexts can select the same provider—both `EnterpriseApp` and `IntegrationTestApp` use `SendEmailWithSmtp`, but for different reasons. The providers become reusable building blocks that contexts assemble according to their specific needs. This reuse justifies the complexity of configurable dispatch, as the alternative would require either duplicating implementation logic across contexts or forcing all contexts to use the same implementation.
+
+### The Decision Tree
+
+A practical decision tree for when to use each pattern:
+
+**Use blanket trait implementations when:**
+- The implementation logic is genuinely generic and works identically for all contexts
+- The only variation between contexts is structural (different field names, nested access)
+- The trait depends only on simple getter traits or other blanket traits
+
+**Use direct trait implementations when:**
+- Implementations are context-specific and unlikely to be reused
+- Only a small number of contexts exist (typically two: production and test)
+- The implementation logic is simple enough that duplication is not burdensome
+
+**Use configurable dispatch with provider traits when:**
+- Multiple distinct implementations exist that different contexts might select from
+- Implementation logic is substantial enough that duplication would be problematic
+- Downstream extensibility is important—third-party code may want to provide alternative implementations
+- Composition of providers is needed (higher-order providers wrapping inner providers)
+
+The progression often follows this path: start with direct implementations for simplicity, extract common logic into blanket traits as duplication emerges, introduce configurable dispatch only when concrete evidence shows multiple implementations need to coexist. This incremental approach prevents premature complexity while maintaining flexibility to adopt more sophisticated patterns as requirements evolve.
+
+### Hybrid Architectures in Practice
+
+The most effective CGP codebases mix all three approaches based on specific needs. Returning to our example, a complete architecture might look like:
+
+````rust
+// Blanket trait - shared implementation across all contexts
+pub trait CanGetUser {
     fn get_user(&self, user_id: &UserId) -> Result<User>;
 }
 
-pub trait HasUserCommands {
-    fn create_user(&self, email: &EmailAddress) -> Result<User>;
-    fn update_user(&self, user_id: &UserId, updates: UserUpdates) -> Result<()>;
-    fn delete_user(&self, user_id: &UserId) -> Result<()>;
+impl<Context> CanGetUser for Context
+where
+    Context: HasDatabase,
+{
+    fn get_user(&self, user_id: &UserId) -> Result<User> {
+        // Generic implementation using database
+    }
 }
 
-pub trait HasUserServices: HasUserQueries + HasUserCommands {}
+// Direct implementation - context-specific without reuse
+pub trait CanSendNotification {
+    fn send_notification(&self, user_id: &UserId, notification: Notification) -> Result<()>;
+}
+
+impl CanSendNotification for ProductionApp {
+    fn send_notification(&self, user_id: &UserId, notification: Notification) -> Result<()> {
+        // Production-specific notification logic
+    }
+}
+
+impl CanSendNotification for TestApp {
+    fn send_notification(&self, user_id: &UserId, notification: Notification) -> Result<()> {
+        // Test-specific notification logic
+    }
+}
+
+// Configurable dispatch - multiple reusable implementations
+#[cgp_component(EmailSender)]
+pub trait CanSendEmail {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
+}
+
+// Multiple provider implementations as shown above...
 ````
 
-Existing code depending on `HasUserServices` continues working as that trait now bundles the focused traits. New code needing only queries depends on just `HasUserQueries`. The architecture becomes more flexible without disrupting existing usage.
+This hybrid architecture applies the simplest effective pattern to each trait based on its actual requirements. `CanGetUser` uses a blanket trait because the implementation is genuinely generic. `CanSendNotification` uses direct implementation because the logic is context-specific without reuse potential. `CanSendEmail` uses configurable dispatch because multiple implementations exist that different contexts compose differently.
 
-### Direct Implementation as Valid Alternative
+Developers reading this codebase encounter different levels of abstraction in different places, but each abstraction level is justified by concrete requirements rather than applied uniformly everywhere. This selectivity makes the architecture more approachable than one that dogmatically applies configurable dispatch to everything, while still providing CGP's benefits where they actually matter.
 
-Perhaps the most underutilized strategy for managing configurable dispatch complexity is simply not using it when direct trait implementation on concrete types provides adequate functionality. While CGP provides powerful code reuse tools, traditional trait implementation offers simpler and more comprehensible approaches that should not be rejected merely for feeling less sophisticated.
+### Balancing Trait Granularity
 
-Consider two contexts needing user services trait implementation. The CGP approach involves defining components with configurable dispatch, creating provider types, and wiring everything together. However, if implementations are simple or genuinely require different approaches awkward to express through shared code, direct implementation may be preferable:
+Even when configurable dispatch is justified by multiple implementations existing, tension remains between maximizing code reuse through fine-grained providers and minimizing cognitive overhead by keeping component counts manageable. This manifests in decisions about factoring capabilities into components: should each small functionality be its own component, or should related capabilities group together even if that reduces selective configuration opportunities?
+
+Consider email functionality that has expanded to include multiple related operations:
 
 ````rust
-pub trait HasUserServices {
-    fn get_user(&self, user_id: &UserId) -> Result<User>;
-    fn create_user(&self, email: &EmailAddress) -> Result<User>;
+use cgp::prelude::*;
+
+// Fine-grained approach - maximum flexibility
+#[cgp_component(EmailSender)]
+pub trait CanSendEmail {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
 }
 
-impl HasUserServices for ProductionApp {
-    fn get_user(&self, user_id: &UserId) -> Result<User> {
-        let row = self.database.query_row(
-            "SELECT id, email, name, created_at FROM users WHERE id = $1",
-            &[user_id],
-        )?;
-        Ok(User {
-            id: row.get(0)?,
-            email: row.get(1)?,
-            name: row.get(2)?,
-            created_at: row.get(3)?,
-        })
-    }
-
-    fn create_user(&self, email: &EmailAddress) -> Result<User> {
-        let user = User::new(email);
-        self.database.execute(
-            "INSERT INTO users (id, email, name, created_at) VALUES ($1, $2, $3, $4)",
-            &[&user.id, &user.email, &user.name, &user.created_at],
-        )?;
-        Ok(user)
-    }
+#[cgp_component(EmailValidator)]
+pub trait CanValidateEmail {
+    fn validate_email(&self, email: &EmailAddress) -> Result<bool>;
 }
 
-impl HasUserServices for TestApp {
-    fn get_user(&self, user_id: &UserId) -> Result<User> {
-        self.mock_users
-            .get(user_id)
-            .cloned()
-            .ok_or_else(|| Error::UserNotFound)
-    }
+#[cgp_component(EmailFormatter)]
+pub trait CanFormatEmail {
+    fn format_email(&self, template: &str, data: &HashMap<String, String>) -> Result<String>;
+}
 
-    fn create_user(&self, email: &EmailAddress) -> Result<User> {
-        let user = User::new(email);
-        self.mock_users.insert(user.id.clone(), user.clone());
-        Ok(user)
-    }
+#[cgp_component(EmailTracker)]
+pub trait CanTrackEmail {
+    fn track_email_sent(&self, recipient: &EmailAddress) -> Result<()>;
 }
 ````
 
-This direct implementation eliminates all CGP-specific machinery while achieving the same functionality. The code is immediately comprehensible to any Rust developer without requiring knowledge of provider traits or component wiring. Implementation duplication represents a trade-off, but may be acceptable if logic is simple (as with the test mock) or if contexts genuinely require different approaches (database queries versus in-memory hash map lookups).
+This maximally fine-grained approach enables maximum flexibility—contexts could wire different providers for each operation. Perhaps read-only contexts only implement validation, while full-featured contexts implement all four capabilities. However, each component adds cognitive overhead: additional wiring entries, additional trait bounds, additional indirection layers, additional configuration points to understand and maintain.
 
-When shared implementation logic becomes significant enough that duplication feels problematic, extract it into regular functions that both implementations call:
+The alternative groups related capabilities:
 
 ````rust
-fn query_user_from_db<D: DatabaseOps>(
-    database: &D,
-    user_id: &UserId,
-) -> Result<User> {
-    let row = database.query_row(
-        "SELECT id, email, name, created_at FROM users WHERE id = $1",
-        &[user_id],
-    )?;
-    Ok(User {
-        id: row.get(0)?,
-        email: row.get(1)?,
-        name: row.get(2)?,
-        created_at: row.get(3)?,
-    })
-}
+use cgp::prelude::*;
 
-impl HasUserServices for ProductionApp {
-    fn get_user(&self, user_id: &UserId) -> Result<User> {
-        query_user_from_db(&self.database, user_id)
-    }
-
-    fn create_user(&self, email: &EmailAddress) -> Result<User> {
-        let user = User::new(email);
-        self.database.execute(
-            "INSERT INTO users (id, email, name, created_at) VALUES ($1, $2, $3, $4)",
-            &[&user.id, &user.email, &user.name, &user.created_at],
-        )?;
-        Ok(user)
-    }
-}
-
-impl HasUserServices for TestApp {
-    fn get_user(&self, user_id: &UserId) -> Result<User> {
-        self.mock_users
-            .get(user_id)
-            .cloned()
-            .ok_or_else(|| Error::UserNotFound)
-    }
-
-    fn create_user(&self, email: &EmailAddress) -> Result<User> {
-        let user = User::new(email);
-        self.mock_users.insert(user.id.clone(), user.clone());
-        Ok(user)
-    }
+#[cgp_component(EmailProvider)]
+pub trait HasEmailCapabilities {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
+    fn validate_email(&self, email: &EmailAddress) -> Result<bool>;
+    fn format_email(&self, template: &str, data: &HashMap<String, String>) -> Result<String>;
+    fn track_email_sent(&self, recipient: &EmailAddress) -> Result<()>;
 }
 ````
 
-This pattern of "trait methods as thin wrappers around shared functions" provides code reuse without requiring full configurable dispatch machinery. While introducing forwarding boilerplate, this boilerplate is explicit and straightforward, easier to understand than implicit provider trait and component delegation mechanisms.
+This coarser-grained approach reduces components and wiring entries, making configuration more manageable. However, it sacrifices flexibility—contexts cannot configure send/validate/format/track operations independently. A context needing only validation must still provide implementations for all methods, even if they return errors or panic.
 
-Adopting CGP as a development philosophy—embracing fission-driven development and accepting multiple contexts—does not necessitate using every CGP technical feature everywhere. Direct trait implementations on concrete types can coexist productively with provider traits and blanket implementations, with each approach applied where it provides the best simplicity-functionality balance.
+As discussed in Chapter 10, optimal granularity depends on actual variation patterns in the codebase. If operations always vary together—AWS implementations provide all four, SendGrid implementations provide all four, mock implementations provide all four—then coarser grouping better reflects problem structure. If contexts genuinely need different combinations—perhaps validation can be shared while sending differs—then fine-grained decomposition provides value.
+
+Start with coarser-grained components and only split when concrete evidence emerges of contexts needing different configurations for grouped capabilities. This prevents premature decomposition while maintaining ability to refactor toward finer granularity as requirements evolve.
 
 ## Secondary Complexity: Getter Traits
 
