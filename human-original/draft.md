@@ -526,6 +526,39 @@ The most significant secondary source of complexity is the use of abstract types
 
 However, the use of abstract types are optional, and one can completely opt out of it and still gain the additional benefits provided by CGP.
 
+For example, consider the following trait:
+
+```rust
+#[cgp_component(UserGetter)]
+pub trait CanGetUser: HasUserIdType + HasUserType + HasErrorType {
+    fn get_user(&self, user_id: &Self::UserId) -> Result<Self::User, Self::Error>;
+}
+```
+
+If the `UserId`, `User`, and `Error` types are the same for all concrete contexts, they can be replaced with the concrete types instead:
+
+```rust
+#[cgp_component(UserGetter)]
+pub trait CanGetUser {
+    fn get_user(&self, user_id: &UserId) -> Result<User, anyhow::Error>;
+}
+```
+
+Alternatively, the abstract user types can be grouped into a collection to be defined in one trait:
+
+```rust
+pub trait HasUserTypes {
+    type UserId;
+
+    type User;
+}
+
+#[cgp_component(UserGetter)]
+pub trait CanGetUser: HasUserTypes + HasErrorType {
+    fn get_user(&self, user_id: &Self::UserId) -> Result<Self::User, Self::Error>;
+}
+```
+
 ### Configurable Static Dispatch
 
 The most complained source of complexity in CGP is the use of configurable static dispatch. This is because the use of `delegate_components!` together with type-level lookup tables is an unfamiliar concept to most Rust developers. As a result, it can feel challenging to write the first CGP wiring, even if it is effectively just specifying keys and values.
@@ -559,7 +592,6 @@ where
 {
     fn query_user(&self, user_id: &UserId) -> Result<User> {
         // perform SQL query
-        ...
     }
 }
 
@@ -580,7 +612,7 @@ where
     Context: HasAwsApiClient,
 {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        // send email with AWS client
+        // send email using cloud service
     }
 }
 
@@ -614,194 +646,119 @@ But if `SendEmailWithAws` and `MockSendEmail` are only used once, they can techn
 ```rust
 impl CanSendEmail for ProductionApp {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        ...
+        // send email using cloud service
     }
 }
 
 impl CanSendEmail for TestApp {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        ...
+        // record sent email for inspection later
     }
 }
 ```
 
 This way, we would be able to not use any configurable static dispatch, but still keep the code for `CanQueryUser` context-generic and be able to maintain two contexts.
 
-### Use of Fusion-Driven techniques with CGP
-
-In a way, the direct implementation of `CanProcessFooOrBar` on `FooApp` and `BarApp` can be considered a *fusion* technique. That is, the classical approach of Rust trait `impl` on concrete types are fusion techniques.
-
-This is because when a trait is implemented directly on a concrete context, it tightly couples the trait implementation with that time. This is a fusion property, as it prevents the context to be split by fission techniques later on, since it would then require code duplication of the trait implementation if it needs to be reused by the second context.
-
-For the example case, the trait impl introduces a partial fusion effect on `FooApp` and `BarApp`, and prevent them from being split further. When the time comes, if a context like `FooApp` needs to be split, a fission technique need to be re-applied to make it splittable again. That is, we can use CGP providers and configurable static dispatch as as the fission counterpart of vanilla trait impl to make the implementation of `CanProcessFooOrBar` to be shared across two split contexts like `FooAppA` and `FooAppB`.
-
-It is also worth noting that the classical fusion techniques are not necessarily incompatible with the fission techniques from CGP. In fact, they can be used together when appropriate to prevent a nuclear explosion of too many contexts being created due to the combinatory explosive nature of configuration permutations.
-
-For example, one can re-introduce fusion techniques like `dyn` traits or enums for a specific context, to allow it to be configurable at runtime instead of compile time. On the other hand, fission techniques like CGP can be used again to replace a `dyn` trait or enum during appropriate time, such as when dyn-compatibility cannot be satisfied or when extensibilty is required.
-
-#### Generic Structs vs Multiple contexts
-
-One notable fusion-driven pattern that shares many similarities with CGP is the use of context structs that contain generic parameters. For example:
+Even when configurable dispatch is truly needed, A viable alternative is to implement traits by forwarding them to plain functions. For example:
 
 ```rust
-pub struct ClassicApp<Database, ApiClient> {
-    pub database: Database,
-    pub api_client: ApiClient,
-    ...
-}
-```
-
-The example `ClassicApp` struct makes use of generic parameters to enable its field members to contain different types, yet still maintain a single definition of the struct.
-
-Although `ClassicApp` could preserve the mono-context property of fusion-driven applications, it achieves that in exchange for verbose implementations that require specifying all generic parameters for every method implementation. For example:
-
-```rust
-impl<Database, ApiClient> ClassicApp<Database, ApiClient>
-where
-    Database: sqlx::Database,
-{
-    fn query_user(&self, user_id: &UserId) -> anyhow::Result<User> {
-        ...
-    }
-}
-```
-
-In the above example, when implementing the `query_user` method, the extra `ApiClient` generic parameter still needs to be specified even though it is not really used by the particular impl.
-
-This shows a significant limitation of the fusion-driven generic structs pattern: as the number of generic fields grow, it quickly becomes tedious and unmanageable to add all generic parameters to each impl side. Worse yet, each generic parameter is position-based, and all impl definitions need to be updated when a new generic parameter is added or removed, even if they are not used for a particular impl.
-
-In contrast, the fission-driven approach provided by CGP significantly improves the ergonomic of generic implementation, for example:
-
-```rust
-pub trait HasDatabase {
-    type Database: sqlx::Database;
-
-    fn database(&self) -> &Self::Database;
-}
-
 pub trait CanQueryUser {
-    fn query_user(&self, user_id: &UserId) -> anyhow::Result<User>;
+    fn query_user(&self, user_id: &UserId) -> Result<User>;
 }
 
-impl<Context> CanQueryUser for Context
-where
-    Context: HasDatabase,
-{
-    fn query_user(&self, user_id: &UserId) -> anyhow::Result<User> {
-        ...
-    }
+pub fn query_user_with_postgres(database: &Postgres, user_id: &UserId) -> Result<User> {
+    // Postgres SQL query
 }
-```
 
-With CGP's approach, the concrete struct is replaced by a generic context, and `Database` becomes an abstract type. The blanket trait `CanQueryUser` can now make use of dependency injection to get a generic `Database` from the context, while also ignore other generic or abstract types such as `ApiClient`.
+pub fn query_user_with_sqlite(database: &Sqlite, user_id: &UserId) -> Result<User> {
+    // SQLite SQL query
+}
 
-Now when it comes to a concrete context, a fully fission-driven approach may require four contexts to be defined when there are 2 different ways to configure the database, and 2 different ways to configure the API client, such as:
-
-```rust
-pub struct PostgresProductionApp {
+pub struct CloudApp {
     pub database: Postgres,
     pub api_client: AwsApiClient,
 }
 
-pub struct SqliteProductionApp {
+pub struct EmbeddedApp {
     pub database: Sqlite,
     pub api_client: AwsApiClient,
 }
 
-pub struct PostgresMockApp {
-    pub database: Postgres,
-    pub api_client: MockApiClient,
-}
-
-pub struct SqliteMockApp {
+pub struct TestApp {
     pub database: Sqlite,
     pub api_client: MockApiClient,
 }
-```
 
-As we can see, the fission-driven approach can quickly go out of hand, if there is an actual need to make use of all possible configurations. However, it is totally fine to use fusion-driven patterns to tame this nuclear explosion, so that we can keep a small number of contexts in the end, such as:
-
-```rust
-pub struct ProductionApp<Database> {
-    pub database: Database,
-    pub api_client: AwsApiClient,
-}
-
-pub struct MockApp<Database> {
-    pub database: Database,
-    pub api_client: MockApiClient,
-}
-```
-
-In the above example, we make use of fusion to fuse the `database` field with generic parameters, but use fission to separate the `api_client` field into two contexts. With this configuration, we can use fission to statically eliminate the possibility of instantiating a mock API client in production, but use fusion to reuse the same context for different database types.
-
-It is also worth noting that even when generic structs are used, CGP can still be used to improve the ergonomics by hiding all the other generic parameters. For example, both `ProductionApp` and `ClassicApp` can implement `HasDatabase` to reuse `CanQueryUser`:
-
-```rust
-impl<Database> HasDatabase for ProductionApp<Database>
-where
-    Database: sqlx::Database,
-{
-    type Database = Database;
-
-    fn database(&self) -> &Self::Database {
-        &self.database
+impl CanQueryUser for CloudApp {
+    fn query_user(&self, user_id: &UserId) -> Result<User> {
+        query_user_with_postgres(&self.database, user_id: &UserId)
     }
 }
 
-impl<Database, ApiClient> HasDatabase for ClassicApp<Database, ApiClient>
-where
-    Database: sqlx::Database,
-{
-    type Database = Database;
+impl CanQueryUser for EmbeddedApp {
+    fn query_user(&self, user_id: &UserId) -> Result<User> {
+        query_user_with_sqlite(&self.database, user_id: &UserId)
+    }
+}
 
-    fn database(&self) -> &Self::Database {
-        &self.database
+impl CanQueryUser for TestApp {
+    fn query_user(&self, user_id: &UserId) -> Result<User> {
+        query_user_with_sqlite(&self.database, user_id: &UserId)
     }
 }
 ```
 
-This also demonstrates that even in mono-context settings, CGP techniques can be used to hide unrelated generic parameters like `ApiClient` from a concrete struct like `ClassicApp`. And when it becomes necessary, the existing use of CGP would allow fission to be applied to `ClassicApp` and split it into multiple contexts like `ProductionApp` and `MockApp`.
-
-It is also worth noting that other fusion techniques can similarly be applied to reduce the number of contexts. For example:
+The above example is a more verbose, albeit simpler replacement of using configurable static dispatch, which would be written as:
 
 ```rust
-pub enum AnyDatabase {
-    Postgres(Postgres),
-    Sqlite(Sqlite),
+#[cgp_component(UserQuerier)]
+pub trait CanQueryUser {
+    fn query_user(&self, user_id: &UserId) -> Result<User>;
 }
 
-pub struct ProductionApp {
-    pub database: AnyDatabase,
-    pub api_client: AwsApiClient,
+#[cgp_impl(QueryUserWithPostgres)]
+impl<Context> UserQuerier for Context
+where
+    Context: HasPostgres,
+{
+    fn query_user(&self, user_id: &UserId) -> Result<User> {
+        let database = self.database();
+        // Postgres SQL query
+    }
 }
 
-pub struct MockApp {
-    pub database: AnyDatabase,
-    pub api_client: MockApiClient,
+#[cgp_impl(QueryUserWithSqlite)]
+impl<Context> UserQuerier for Context
+where
+    Context: HasSqlite,
+{
+    fn query_user(&self, user_id: &UserId) -> Result<User> {
+        let database = self.database();
+        // SQLite SQL query
+    }
+}
+
+delegate_components! {
+    CloudApp {
+        UserQuerierComponent:
+            QueryUserWithPostgres,
+    }
+}
+
+delegate_components! {
+    EmbeddedApp {
+        UserQuerierComponent:
+            QueryUserWithSqlite,
+    }
+}
+
+delegate_components! {
+    TestApp {
+        UserQuerierComponent:
+            QueryUserWithSqlite,
+    }
 }
 ```
-
-In the above example, we make use of enums instead of generic structs to allow both `ProductionApp` and `MockApp` to be instantiated with either `Postgres` or `Sqlite`. But as long as the same constraints are satisfied, i.e. `sqlx::Database` is implemented for `AnyDatabase`, then existing context-generic code like `CanQueryUser` can still be reused seamlessly on it.
-
-This also demonstrates another secondary benefit that CGP brings: we can make use of fission to not only create specialized structs, but also allow seamless transition to use different fusion patterns on existing code without requiring significant refactoring of the code base.
-
-Furthermore, the fission property of the application means that in case if external users want to support new databases in the future, such as `MySql`, they can still use fission to create new third party contexts such as:
-
-```rust
-pub enum ExtendedAnyDatabase {
-    Postgres(Postgres),
-    Sqlite(Sqlite),
-    MySql(MySql),
-}
-
-pub struct ThirdPartyApp {
-    pub database: ExtendedAnyDatabase,
-    pub api_client: AwsApiClient,
-}
-```
-
-In other words, when fusion techniques like enums are used together with fission, it removes the bottlneck of an enum becoming the bottleneck of extensibility. Third party users no longer need to request the project a new `MySql` variant to `AnyDatabase` or threaten to fork the project, since they can define their own enums to do so with minimal effort.
 
 ### Getter Traits
 
@@ -815,38 +772,38 @@ Originally, the auto getter traits were introduced by CGP to reduce the boilerpl
 
 ```rust
 #[cgp_auto_getter]
-pub trait HasConfig {
-    fn config(&self) -> &Config;
+pub trait HasDatabase {
+    fn database(&self) -> &Database;
 }
 
-pub struct FooApp {
-    pub config: Config,
-    pub foo: Foo,
+pub struct ProductionApp {
+    pub database: Database,
+    pub api_client: AwsApiClient,
 }
 
-impl HasConfig for FooApp {
-    fn config(&self) -> &Config {
-        &self.config
+pub struct TestApp {
+    pub database: Database,
+    pub api_client: MockApiClient,
+}
+
+impl HasDatabase for ProductionApp {
+    fn database(&self) -> &Database {
+        &self.database
     }
 }
 
-pub struct BarApp {
-    pub config: Config,
-    pub bar: Bar
-}
-
-impl HasConfig for BarApp {
-    fn config(&self) -> &Config {
-        &self.config
+impl HasDatabase for TestApp {
+    fn database(&self) -> &Database {
+        &self.database
     }
 }
 ```
 
-The key to understanding is that an auto getter trait like `HasConfig` is still just a Rust trait that happen to have a special blanket implementation. But if a context like `FooApp` don't derive `HasField`, it can just implement `HasConfig` manually because it don't overlap with the blanket implementation.
+The key to understanding is that an auto getter trait like `HasDatabase` is still just a Rust trait that happen to have a special blanket implementation. But if a context like `ProductionApp` don't derive `HasField`, it can just implement `HasDatabase` manually because it don't overlap with the blanket implementation.
 
 This can hopefully reduce the perception that getter traits are too magical, and thus too complex. At the very least, this requires a delicate trade off between accepting the complexity caused by the boilerplate of getter trait impls, or the complexity caused by the automagical implementation of auto getter traits.
 
-### Functional Context-Generic Programming
+## Functional Context-Generic Programming
 
 A final secondary source of complexity comes when functional programming techniques are applied together with CGP. When a CGP component trait contains only one method, its provider can be treated like a plain function. With that, one can apply functional programming techniques such as higher order functions, in the form of higher order providers in CGP.
 
@@ -1031,7 +988,185 @@ With such degree of inflexibility, one could reasonably argue that it might have
 
 As we can see, the main issue with monolithic traits is that it subtly increases the fusion property of the code, even though the code is written in a context-generic style. This is because the developer is still in a fusion-driven mindset when writing fission-driven code.
 
-#### Incremental Fission
+## Fusion-Fission Hybrids
+
+### Use of Fusion-Driven techniques with CGP
+
+In a way, the direct implementation of `CanProcessFooOrBar` on `FooApp` and `BarApp` can be considered a *fusion* technique. That is, the classical approach of Rust trait `impl` on concrete types are fusion techniques.
+
+This is because when a trait is implemented directly on a concrete context, it tightly couples the trait implementation with that time. This is a fusion property, as it prevents the context to be split by fission techniques later on, since it would then require code duplication of the trait implementation if it needs to be reused by the second context.
+
+For the example case, the trait impl introduces a partial fusion effect on `FooApp` and `BarApp`, and prevent them from being split further. When the time comes, if a context like `FooApp` needs to be split, a fission technique need to be re-applied to make it splittable again. That is, we can use CGP providers and configurable static dispatch as as the fission counterpart of vanilla trait impl to make the implementation of `CanProcessFooOrBar` to be shared across two split contexts like `FooAppA` and `FooAppB`.
+
+It is also worth noting that the classical fusion techniques are not necessarily incompatible with the fission techniques from CGP. In fact, they can be used together when appropriate to prevent a nuclear explosion of too many contexts being created due to the combinatory explosive nature of configuration permutations.
+
+For example, one can re-introduce fusion techniques like `dyn` traits or enums for a specific context, to allow it to be configurable at runtime instead of compile time. On the other hand, fission techniques like CGP can be used again to replace a `dyn` trait or enum during appropriate time, such as when dyn-compatibility cannot be satisfied or when extensibilty is required.
+
+### Generic Structs vs Multiple contexts
+
+One notable fusion-driven pattern that shares many similarities with CGP is the use of context structs that contain generic parameters. For example:
+
+```rust
+pub struct ClassicApp<Database, ApiClient> {
+    pub database: Database,
+    pub api_client: ApiClient,
+    ...
+}
+```
+
+The example `ClassicApp` struct makes use of generic parameters to enable its field members to contain different types, yet still maintain a single definition of the struct.
+
+Although `ClassicApp` could preserve the mono-context property of fusion-driven applications, it achieves that in exchange for verbose implementations that require specifying all generic parameters for every method implementation. For example:
+
+```rust
+impl<Database, ApiClient> ClassicApp<Database, ApiClient>
+where
+    Database: sqlx::Database,
+{
+    fn query_user(&self, user_id: &UserId) -> anyhow::Result<User> {
+        ...
+    }
+}
+```
+
+In the above example, when implementing the `query_user` method, the extra `ApiClient` generic parameter still needs to be specified even though it is not really used by the particular impl.
+
+This shows a significant limitation of the fusion-driven generic structs pattern: as the number of generic fields grow, it quickly becomes tedious and unmanageable to add all generic parameters to each impl side. Worse yet, each generic parameter is position-based, and all impl definitions need to be updated when a new generic parameter is added or removed, even if they are not used for a particular impl.
+
+In contrast, the fission-driven approach provided by CGP significantly improves the ergonomic of generic implementation, for example:
+
+```rust
+pub trait HasDatabase {
+    type Database: sqlx::Database;
+
+    fn database(&self) -> &Self::Database;
+}
+
+pub trait CanQueryUser {
+    fn query_user(&self, user_id: &UserId) -> anyhow::Result<User>;
+}
+
+impl<Context> CanQueryUser for Context
+where
+    Context: HasDatabase,
+{
+    fn query_user(&self, user_id: &UserId) -> anyhow::Result<User> {
+        ...
+    }
+}
+```
+
+With CGP's approach, the concrete struct is replaced by a generic context, and `Database` becomes an abstract type. The blanket trait `CanQueryUser` can now make use of dependency injection to get a generic `Database` from the context, while also ignore other generic or abstract types such as `ApiClient`.
+
+Now when it comes to a concrete context, a fully fission-driven approach may require four contexts to be defined when there are 2 different ways to configure the database, and 2 different ways to configure the API client, such as:
+
+```rust
+pub struct PostgresProductionApp {
+    pub database: Postgres,
+    pub api_client: AwsApiClient,
+}
+
+pub struct SqliteProductionApp {
+    pub database: Sqlite,
+    pub api_client: AwsApiClient,
+}
+
+pub struct PostgresMockApp {
+    pub database: Postgres,
+    pub api_client: MockApiClient,
+}
+
+pub struct SqliteMockApp {
+    pub database: Sqlite,
+    pub api_client: MockApiClient,
+}
+```
+
+As we can see, the fission-driven approach can quickly go out of hand, if there is an actual need to make use of all possible configurations. However, it is totally fine to use fusion-driven patterns to tame this nuclear explosion, so that we can keep a small number of contexts in the end, such as:
+
+```rust
+pub struct ProductionApp<Database> {
+    pub database: Database,
+    pub api_client: AwsApiClient,
+}
+
+pub struct MockApp<Database> {
+    pub database: Database,
+    pub api_client: MockApiClient,
+}
+```
+
+In the above example, we make use of fusion to fuse the `database` field with generic parameters, but use fission to separate the `api_client` field into two contexts. With this configuration, we can use fission to statically eliminate the possibility of instantiating a mock API client in production, but use fusion to reuse the same context for different database types.
+
+It is also worth noting that even when generic structs are used, CGP can still be used to improve the ergonomics by hiding all the other generic parameters. For example, both `ProductionApp` and `ClassicApp` can implement `HasDatabase` to reuse `CanQueryUser`:
+
+```rust
+impl<Database> HasDatabase for ProductionApp<Database>
+where
+    Database: sqlx::Database,
+{
+    type Database = Database;
+
+    fn database(&self) -> &Self::Database {
+        &self.database
+    }
+}
+
+impl<Database, ApiClient> HasDatabase for ClassicApp<Database, ApiClient>
+where
+    Database: sqlx::Database,
+{
+    type Database = Database;
+
+    fn database(&self) -> &Self::Database {
+        &self.database
+    }
+}
+```
+
+This also demonstrates that even in mono-context settings, CGP techniques can be used to hide unrelated generic parameters like `ApiClient` from a concrete struct like `ClassicApp`. And when it becomes necessary, the existing use of CGP would allow fission to be applied to `ClassicApp` and split it into multiple contexts like `ProductionApp` and `MockApp`.
+
+It is also worth noting that other fusion techniques can similarly be applied to reduce the number of contexts. For example:
+
+```rust
+pub enum AnyDatabase {
+    Postgres(Postgres),
+    Sqlite(Sqlite),
+}
+
+pub struct ProductionApp {
+    pub database: AnyDatabase,
+    pub api_client: AwsApiClient,
+}
+
+pub struct MockApp {
+    pub database: AnyDatabase,
+    pub api_client: MockApiClient,
+}
+```
+
+In the above example, we make use of enums instead of generic structs to allow both `ProductionApp` and `MockApp` to be instantiated with either `Postgres` or `Sqlite`. But as long as the same constraints are satisfied, i.e. `sqlx::Database` is implemented for `AnyDatabase`, then existing context-generic code like `CanQueryUser` can still be reused seamlessly on it.
+
+This also demonstrates another secondary benefit that CGP brings: we can make use of fission to not only create specialized structs, but also allow seamless transition to use different fusion patterns on existing code without requiring significant refactoring of the code base.
+
+Furthermore, the fission property of the application means that in case if external users want to support new databases in the future, such as `MySql`, they can still use fission to create new third party contexts such as:
+
+```rust
+pub enum ExtendedAnyDatabase {
+    Postgres(Postgres),
+    Sqlite(Sqlite),
+    MySql(MySql),
+}
+
+pub struct ThirdPartyApp {
+    pub database: ExtendedAnyDatabase,
+    pub api_client: AwsApiClient,
+}
+```
+
+In other words, when fusion techniques like enums are used together with fission, it removes the bottlneck of an enum becoming the bottleneck of extensibility. Third party users no longer need to request the project a new `MySql` variant to `AnyDatabase` or threaten to fork the project, since they can define their own enums to do so with minimal effort.
+
+## Incremental Fission
 
 It is very challenging to steer Rust developers away from monolithic trait designs, and if we try to push for functional styles all at once, it would only result in further backslash against adoption. So instead, we need to find a middleground so that developers can still write monolithic traits, at least initially, even in a fission-driven environment.
 

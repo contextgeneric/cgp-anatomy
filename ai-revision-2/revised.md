@@ -1857,196 +1857,205 @@ The next chapter explores how this selective philosophy extends to integration w
 
 # Chapter 10: Fusion-Fission Hybrids: Practical Integration Strategies
 
-Having examined how to manage CGP's complexity through selective adoption of its technical features, we now address a crucial practical question: how can fusion-driven and fission-driven patterns coexist productively within the same codebase? The fusion-fission framework established in Chapter 4 presented these approaches as contrasting philosophies, but this contrast need not imply mutual exclusivity. In practice, the most effective architectures often combine both approaches strategically—applying fission where it enables valuable code reuse across contexts while using fusion where it prevents unnecessary type proliferation. This chapter demonstrates concrete integration strategies that leverage each approach's strengths while mitigating its weaknesses.
+Having examined how to manage CGP's complexity through selective adoption of its technical features in Chapter 9, we now address a crucial practical question: how can fusion-driven and fission-driven patterns coexist productively within the same codebase? The fusion-fission framework established in Chapter 4 presented these approaches as contrasting philosophies, but this contrast need not imply mutual exclusivity. In practice, the most effective architectures often combine both approaches strategically—applying fission where it enables valuable code reuse across contexts while using fusion where it prevents unnecessary type proliferation. This chapter demonstrates concrete integration strategies using the `ProductionApp` and `TestApp` contexts introduced in Chapter 9, showing how each hybrid approach addresses different dimensions of the multi-context management problem.
 
 ## Using Classical Trait Implementations with CGP
 
-Context-generic code does not require all traits to use CGP components or even blanket implementations. Regular trait implementations directly on concrete types remain valuable tools even in predominantly fission-driven codebases, providing a mechanism for selectively applying fusion where context-specific behavior is needed.
+Context-generic code does not require all traits to use CGP components or even blanket implementations. Regular trait implementations directly on concrete types remain valuable tools even in predominantly fission-driven codebases, providing a mechanism for selectively applying fusion where context-specific behavior is genuinely needed.
 
-Consider two application contexts sharing a database but differing in their email sender implementations:
+Recall from Chapter 9 the two application contexts sharing a database but differing in their API client implementations:
 
 ```rust
 #[derive(HasField)]
 pub struct ProductionApp {
     pub database: Database,
     pub api_client: ProductionApiClient,
-    pub email_sender: ProductionEmailSender,
 }
 
 #[derive(HasField)]
-pub struct MockApp {
+pub struct TestApp {
     pub database: Database,
     pub api_client: MockApiClient,
-    pub email_sender: MockEmailSender,
 }
 ```
 
-Suppose we want to implement file processing functionality that uses both the shared database and the context-specific API client. The pure fission approach would define a CGP component with separate providers:
+Now suppose we need to implement two capabilities: querying users from the database and sending emails via the API client. The crucial observation is that these two capabilities have fundamentally different variation characteristics. User querying executes identical SQL regardless of which context uses it—both production and test contexts query the same database schema using the same queries. Email sending, by contrast, has genuinely different implementations: production contexts send real emails through AWS, while test contexts record emails for later verification without actually sending them.
+
+For user querying, where the implementation logic is truly identical across contexts, a blanket trait implementation provides the optimal solution:
 
 ```rust
-#[cgp_component(FileProcessor)]
-pub trait CanProcessFiles {
-    fn process_file(&self, file_id: &FileId) -> Result<()>;
+#[cgp_auto_getter]
+pub trait HasDatabase {
+    fn database(&self) -> &Database;
 }
 
-#[cgp_impl(new ProductionFileProcessor)]
-impl<Context> FileProcessor for Context
+pub trait CanGetUser {
+    fn get_user(&self, user_id: &UserId) -> Result<User>;
+}
+
+impl<Context> CanGetUser for Context
 where
-    Context: HasDatabase + HasProductionApiClient,
+    Context: HasDatabase,
 {
-    fn process_file(&self, file_id: &FileId) -> Result<()> {
-        let file_data = self.api_client().fetch_file(file_id)?;
-        self.database().store_file(file_id, &file_data)?;
-        Ok(())
-    }
-}
-
-#[cgp_impl(new MockFileProcessor)]
-impl<Context> FileProcessor for Context
-where
-    Context: HasDatabase + HasMockApiClient,
-{
-    fn process_file(&self, file_id: &FileId) -> Result<()> {
-        let file_data = self.api_client().fetch_file(file_id)?;
-        self.database().store_file(file_id, &file_data)?;
-        Ok(())
+    fn get_user(&self, user_id: &UserId) -> Result<User> {
+        let row = self.database().query_row(
+            "SELECT id, email, name, created_at FROM users WHERE id = $1",
+            &[user_id],
+        )?;
+        Ok(User {
+            id: row.get(0)?,
+            email: row.get(1)?,
+            name: row.get(2)?,
+            created_at: row.get(3)?,
+        })
     }
 }
 ```
 
-Inspection reveals that both implementations are identical—they fetch from the API client and store in the database. This duplication suggests the functionality doesn't genuinely benefit from separate implementations. When implementations don't vary between contexts, direct trait implementation on concrete types provides a simpler approach:
+This blanket implementation captures the essential insight that user querying doesn't vary between contexts—it always involves the same SQL query and result processing. The generic code works with any context providing database access through the `HasDatabase` getter trait, whether that context is `ProductionApp`, `TestApp`, or any future context that might be introduced. The SQL query string and the logic for transforming database rows into `User` objects remain identical regardless of deployment environment or test configuration.
+
+Both contexts automatically gain the `get_user` capability simply by implementing the minimal `HasDatabase` getter:
 
 ```rust
-pub trait CanProcessFiles {
-    fn process_file(&self, file_id: &FileId) -> Result<()>;
-}
-
-impl CanProcessFiles for ProductionApp {
-    fn process_file(&self, file_id: &FileId) -> Result<()> {
-        let file_data = self.api_client.fetch_file(file_id)?;
-        self.database.store_file(file_id, &file_data)?;
-        Ok(())
+impl HasDatabase for ProductionApp {
+    fn database(&self) -> &Database {
+        &self.database
     }
 }
 
-impl CanProcessFiles for MockApp {
-    fn process_file(&self, file_id: &FileId) -> Result<()> {
-        let file_data = self.api_client.fetch_file(file_id)?;
-        self.database.store_file(file_id, &file_data)?;
-        Ok(())
+impl HasDatabase for TestApp {
+    fn database(&self) -> &Database {
+        &self.database
     }
 }
 ```
 
-This hybrid approach applies fusion by coupling the trait to concrete types, but does so deliberately for this specific trait while leaving the rest of the codebase using fission-driven patterns. Fusion and fission operate at the trait level rather than requiring wholesale commitment to one paradigm.
+These straightforward field access implementations require minimal code, yet they enable the contexts to satisfy the blanket implementation's requirements. Any code that can work with a `CanGetUser` implementation now works uniformly with both `ProductionApp` and `TestApp`, with no duplication of the query logic and no need for each context to reimplement identical database operations.
 
-When shared implementation logic becomes substantial, extracting it into standalone functions eliminates duplication while maintaining the fusion property:
+Email sending presents an entirely different situation. The production context needs to invoke AWS APIs to send real emails, while the test context needs to record email details for verification without performing actual network operations. This behavioral difference cannot be abstracted behind a simple getter trait because the fundamental operations differ:
 
 ```rust
-fn process_file_impl<Client: ApiClient, Db: DatabaseOps>(
-    api_client: &Client,
-    database: &Db,
-    file_id: &FileId,
-) -> Result<()> {
-    let file_data = api_client.fetch_file(file_id)?;
-    database.store_file(file_id, &file_data)?;
-    Ok(())
+pub trait CanSendEmail {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
 }
 
-impl CanProcessFiles for ProductionApp {
-    fn process_file(&self, file_id: &FileId) -> Result<()> {
-        process_file_impl(&self.api_client, &self.database, file_id)
+impl CanSendEmail for ProductionApp {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        self.api_client.send_email_via_aws(recipient, message)?;
+        Ok(())
     }
 }
 
-impl CanProcessFiles for MockApp {
-    fn process_file(&self, file_id: &FileId) -> Result<()> {
-        process_file_impl(&self.api_client, &self.database, file_id)
+impl CanSendEmail for TestApp {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        self.api_client.record_email_for_verification(recipient, message);
+        Ok(())
     }
 }
 ```
 
-The trait methods become thin wrappers that extract values from concrete contexts and forward them to the generic helper function. This "trait methods as forwarding wrappers" pattern provides a middle ground between full duplication and full fission-driven abstraction.
+The production implementation invokes `send_email_via_aws`, which constructs AWS API requests, handles authentication, manages retries, and processes errors. The test implementation invokes `record_email_for_verification`, which appends the email details to an in-memory log for later assertions. These implementations don't just access different fields or call different methods—they perform fundamentally different operations with different failure modes, error handling, and side effects.
+
+This hybrid approach applies fusion by coupling the `CanSendEmail` trait to concrete types through direct implementations, while the `CanGetUser` trait remains generic through its blanket implementation. Fusion and fission operate at the trait level rather than requiring wholesale commitment to one paradigm for the entire codebase. The architecture recognizes that different capabilities have different variation patterns and chooses the appropriate pattern for each case.
+
+When substantial shared logic exists even in cases requiring context-specific implementations, extracting common functionality into standalone helper functions eliminates duplication while maintaining the fusion property. Consider if both contexts needed some preprocessing of email content before sending:
+
+```rust
+fn prepare_email_content(message: &str) -> String {
+    // Common validation, formatting, encoding
+    format!("<!DOCTYPE html>{}</html>", html_escape(message))
+}
+
+impl CanSendEmail for ProductionApp {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        let content = prepare_email_content(message);
+        self.api_client.send_email_via_aws(recipient, &content)?;
+        Ok(())
+    }
+}
+
+impl CanSendEmail for TestApp {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        let content = prepare_email_content(message);
+        self.api_client.record_email_for_verification(recipient, &content);
+        Ok(())
+    }
+}
+```
+
+The trait methods become thin wrappers that prepare the email content through shared logic, then delegate to context-specific operations. This "trait methods as forwarding wrappers" pattern provides a middle ground between complete duplication and complete abstraction, extracting genuinely common logic while preserving the ability to vary the fundamental operations.
+
+The key insight this section establishes is that the choice between blanket implementations and direct trait implementations should be driven by the actual variation characteristics of the functionality being implemented. When implementations are genuinely identical across contexts—as with database queries that execute the same SQL—blanket implementations eliminate duplication and ensure consistency. When implementations differ fundamentally—as with email sending that performs different operations—direct trait implementations provide the simplicity of concrete code without forcing artificial abstraction. The hybrid approach applies each pattern where it provides the most value.
 
 ## Generic Structs Versus Multiple Contexts
 
-A second hybrid strategy uses generic struct parameters to contain certain dimensions of variation within a single context type while allowing other dimensions to split across multiple contexts. This provides fine-grained control over which variations occur through monomorphization versus context splitting.
+A second hybrid strategy uses generic struct parameters to contain certain dimensions of variation within a single context type while allowing other dimensions to split across multiple contexts. This provides fine-grained control over which variations occur through monomorphization versus context splitting, addressing the context proliferation problem that can emerge when every variation dimension demands its own concrete type.
 
-Consider the application context where database implementations can vary independently of API client and email sender. The pure fission approach would create separate context types for every combination:
+Consider the situation where database backend implementations need to vary—the application might use PostgreSQL in production, SQLite for local development, and an in-memory database for unit tests. If we maintain the pure fission approach with separate context types for every variation, we face exponential growth in the number of contexts:
 
 ```rust
 #[derive(HasField)]
 pub struct PostgresProductionApp {
     pub database: PostgresDatabase,
     pub api_client: ProductionApiClient,
-    pub email_sender: ProductionEmailSender,
 }
 
 #[derive(HasField)]
 pub struct SqliteProductionApp {
     pub database: SqliteDatabase,
     pub api_client: ProductionApiClient,
-    pub email_sender: ProductionEmailSender,
 }
 
 #[derive(HasField)]
-pub struct PostgresMockApp {
+pub struct InMemoryProductionApp {
+    pub database: InMemoryDatabase,
+    pub api_client: ProductionApiClient,
+}
+
+#[derive(HasField)]
+pub struct PostgresTestApp {
     pub database: PostgresDatabase,
     pub api_client: MockApiClient,
-    pub email_sender: MockEmailSender,
 }
 
 #[derive(HasField)]
-pub struct SqliteMockApp {
+pub struct SqliteTestApp {
     pub database: SqliteDatabase,
     pub api_client: MockApiClient,
-    pub email_sender: MockEmailSender,
+}
+
+#[derive(HasField)]
+pub struct InMemoryTestApp {
+    pub database: InMemoryDatabase,
+    pub api_client: MockApiClient,
 }
 ```
 
-With three configurable components and two options for each, we need four distinct context types. Adding a third database option would require six contexts; adding a third API client option would require nine contexts. The exponential growth quickly becomes unmanageable.
+With two API client variations and three database variations, we need six distinct context types. Adding a fourth database option would require eight contexts; adding a third API client option would require twelve contexts. The exponential growth quickly becomes unmanageable, and we haven't even considered variations in other components like logging, metrics, or caching.
 
-The hybrid approach recognizes that not all variation needs separate context types. Database choice can be parameterized through a generic parameter:
+The hybrid approach recognizes that database backend choice represents superficial variation rather than fundamental behavioral difference. The `get_user` implementation from the previous section demonstrates this—the SQL query and result processing remain identical regardless of which database backend executes them. Different databases implement the same `DatabaseOps` interface, providing query execution, transaction management, and connection pooling through identical APIs. The choice between PostgreSQL and SQLite affects performance characteristics and deployment requirements, but not the application logic that depends on database operations.
+
+Superficial variation of this kind can be parameterized through generic struct parameters:
 
 ```rust
 #[derive(HasField)]
 pub struct ProductionApp<Database> {
     pub database: Database,
     pub api_client: ProductionApiClient,
-    pub email_sender: ProductionEmailSender,
 }
 
 #[derive(HasField)]
-pub struct MockApp<Database> {
+pub struct TestApp<Database> {
     pub database: Database,
     pub api_client: MockApiClient,
-    pub email_sender: MockEmailSender,
 }
 ```
 
-This structure applies fusion to the database dimension by parameterizing it within each context, while applying fission to the API client and email sender dimensions through separate context types. The result is exactly two context types regardless of how many database options exist, dramatically reducing type proliferation while maintaining fission-driven benefits.
+This structure applies fusion to the database dimension by parameterizing it within each context, while applying fission to the API client dimension through separate context types. The result is exactly two context types—`ProductionApp` and `TestApp`—regardless of how many database implementations exist. Adding new database backends requires no new context types; the existing generic contexts already accommodate any database implementing the required interface.
 
-The generic parameter enables code to work uniformly with any database implementation through trait bounds:
-
-```rust
-impl<Database> ProductionApp<Database>
-where
-    Database: DatabaseOps,
-{
-    pub fn query_user(&self, user_id: &UserId) -> Result<User> {
-        self.database.query_user(user_id)
-    }
-}
-```
-
-Context-generic code depending on database functionality through getter traits continues working seamlessly:
+The generic parameter enables the `get_user` implementation to work uniformly across all database backends through trait bounds:
 
 ```rust
-#[cgp_auto_getter]
-pub trait HasDatabase {
-    fn database(&self) -> &dyn DatabaseOps;
-}
-
 impl<Database> HasDatabase for ProductionApp<Database>
 where
     Database: DatabaseOps,
@@ -2056,7 +2065,7 @@ where
     }
 }
 
-impl<Database> HasDatabase for MockApp<Database>
+impl<Database> HasDatabase for TestApp<Database>
 where
     Database: DatabaseOps,
 {
@@ -2066,46 +2075,110 @@ where
 }
 ```
 
-The getter trait implementation bridges between the generic struct parameter and the context-generic trait, demonstrating how hybrid approaches leverage both fusion techniques (generic parameters) and fission techniques (context-generic traits) within the same architecture.
+The getter trait implementation bridges between the generic struct parameter and the context-generic trait interface. The blanket implementation of `CanGetUser` continues working without modification—it depends only on the `HasDatabase` trait, remaining completely agnostic about whether the database comes from a concrete field or a generic parameter.
+
+Context-generic code that depends on database functionality continues working seamlessly:
+
+```rust
+pub fn process_user_request<Context>(
+    context: &Context,
+    user_id: &UserId,
+) -> Result<Response>
+where
+    Context: CanGetUser + CanSendEmail,
+{
+    let user = context.get_user(user_id)?;
+    context.send_email(&user.email, "Your request was processed")?;
+    Ok(Response::success())
+}
+```
+
+This function works uniformly with `ProductionApp<PostgresDatabase>`, `ProductionApp<SqliteDatabase>`, `TestApp<InMemoryDatabase>`, and any other valid instantiation. The generic code sees only the capabilities expressed through trait bounds, remaining completely decoupled from decisions about database backends and API client implementations.
+
+Concrete usage instantiates the contexts with specific database types:
+
+```rust
+fn main() -> Result<()> {
+    let prod_app = ProductionApp {
+        database: PostgresDatabase::connect(&config.database_url)?,
+        api_client: ProductionApiClient::new(&config.aws_credentials)?,
+    };
+
+    process_user_request(&prod_app, &user_id)?;
+    Ok(())
+}
+
+#[test]
+fn test_user_request() {
+    let test_app = TestApp {
+        database: InMemoryDatabase::new(),
+        api_client: MockApiClient::new(),
+    };
+
+    let result = process_user_request(&test_app, &test_user_id);
+    assert!(result.is_ok());
+}
+```
+
+The database choice becomes a concrete instantiation decision made at the system edges, while all the business logic remains generic and reusable. Monomorphization generates specialized implementations for each concrete combination, producing optimized code without runtime overhead.
+
+This hybrid strategy reveals a crucial architectural principle: not all variation dimensions need separate context types. Database backend choice represents configuration that can be parameterized, while API client choice represents behavioral difference that justifies context splitting. The distinction hinges on whether the variation affects only the types of components or fundamentally changes how the application operates. Generic parameters handle the former; separate contexts handle the latter.
 
 ## Strategic Application of Enums and Dynamic Dispatch
 
-A third hybrid strategy selectively reintroduces enums or trait objects to contain variation at runtime rather than compile time, providing another mechanism for controlling context proliferation when the performance cost of dynamic dispatch is acceptable.
+A third hybrid strategy selectively reintroduces enums or trait objects to contain variation at runtime rather than compile time, providing another mechanism for controlling context proliferation when the performance cost of dynamic dispatch is acceptable or when runtime flexibility is explicitly required.
 
-Suppose the database backend needs runtime selection based on configuration files or environment variables. The pure fission approach struggles with this requirement since it assumes context types are determined at compile time. The hybrid approach recognizes that runtime flexibility for certain components justifies applying fusion through enums:
+The generic parameter approach from the previous section assumes that database backend choice is determined at compile time—the application binary contains specialized code for whatever database type it's compiled with. However, many real-world scenarios require runtime database selection based on configuration files, environment variables, or command-line arguments. A single production binary might need to support multiple database backends, with the actual choice deferred until deployment.
+
+The pure fission approach struggles with this requirement since it fundamentally assumes context types are determined at compile time. The hybrid approach recognizes that runtime flexibility for certain components justifies applying fusion through enums:
 
 ```rust
 pub enum AnyDatabase {
     Postgres(PostgresDatabase),
     Sqlite(SqliteDatabase),
+    InMemory(InMemoryDatabase),
 }
 
 impl DatabaseOps for AnyDatabase {
-    fn query_user(&self, user_id: &UserId) -> Result<User> {
+    fn query_row(&self, sql: &str, params: &[&dyn Any]) -> Result<Row> {
         match self {
-            AnyDatabase::Postgres(db) => db.query_user(user_id),
-            AnyDatabase::Sqlite(db) => db.query_user(user_id),
+            AnyDatabase::Postgres(db) => db.query_row(sql, params),
+            AnyDatabase::Sqlite(db) => db.query_row(sql, params),
+            AnyDatabase::InMemory(db) => db.query_row(sql, params),
         }
     }
-    // Other methods...
-}
 
+    fn execute(&self, sql: &str, params: &[&dyn Any]) -> Result<()> {
+        match self {
+            AnyDatabase::Postgres(db) => db.execute(sql, params),
+            AnyDatabase::Sqlite(db) => db.execute(sql, params),
+            AnyDatabase::InMemory(db) => db.execute(sql, params),
+        }
+    }
+
+    // Other DatabaseOps methods follow the same pattern
+}
+```
+
+The `AnyDatabase` enum implements the `DatabaseOps` trait by forwarding each method to the appropriate variant through pattern matching. This introduces a level of indirection—method calls require matching on the enum to determine which concrete implementation to invoke—but the indirection happens at the database operation boundary rather than permeating through all application code.
+
+With this enum defined, contexts can use concrete types containing runtime-variable database backends:
+
+```rust
 #[derive(HasField)]
 pub struct ProductionApp {
     pub database: AnyDatabase,
     pub api_client: ProductionApiClient,
-    pub email_sender: ProductionEmailSender,
 }
 
 #[derive(HasField)]
-pub struct MockApp {
+pub struct TestApp {
     pub database: AnyDatabase,
     pub api_client: MockApiClient,
-    pub email_sender: MockEmailSender,
 }
 ```
 
-This structure applies fusion to the database dimension through an enum holding any database variant at runtime, while maintaining fission for the API client and email sender dimensions. The enum enables runtime database selection while avoiding the need for `ProductionApp<PostgresDatabase>` and `ProductionApp<SqliteDatabase>` as separate types.
+This structure applies fusion to the database dimension through the enum holding any database variant at runtime, while maintaining fission for the API client dimension through separate context types. The enum enables runtime database selection while avoiding the need for `ProductionApp<PostgresDatabase>`, `ProductionApp<SqliteDatabase>`, and `ProductionApp<InMemoryDatabase>` as separate compile-time types.
 
 Context-generic code depending on database functionality continues working unchanged:
 
@@ -2116,37 +2189,65 @@ impl HasDatabase for ProductionApp {
     }
 }
 
-impl HasDatabase for MockApp {
+impl HasDatabase for TestApp {
     fn database(&self) -> &dyn DatabaseOps {
         &self.database
     }
 }
 ```
 
-Because `AnyDatabase` implements `DatabaseOps`, it satisfies the trait bound required by the getter trait implementation. This demonstrates the flexibility of combining fusion and fission techniques—the choice of how to handle database variation is localized to the context definitions.
+Because `AnyDatabase` implements `DatabaseOps`, it satisfies the trait bound required by the getter trait implementation. The blanket implementation of `CanGetUser` continues working without modification—it depends only on the abstract `HasDatabase` interface, remaining completely agnostic about whether the database is determined at compile time through generic parameters or at runtime through enum variants.
 
-Trait objects provide an alternative when the set of possible implementations is open-ended:
+Runtime selection happens at application initialization:
+
+```rust
+fn create_production_app(config: &Config) -> Result<ProductionApp> {
+    let database = match config.database_type.as_str() {
+        "postgres" => AnyDatabase::Postgres(
+            PostgresDatabase::connect(&config.database_url)?
+        ),
+        "sqlite" => AnyDatabase::Sqlite(
+            SqliteDatabase::open(&config.database_path)?
+        ),
+        _ => return Err(Error::UnsupportedDatabase),
+    };
+
+    Ok(ProductionApp {
+        database,
+        api_client: ProductionApiClient::new(&config.aws_credentials)?,
+    })
+}
+```
+
+The application reads configuration and constructs the appropriate database variant, with all subsequent code operating uniformly regardless of which variant was selected. This demonstrates the flexibility of combining fusion and fission techniques—the choice of how to handle database variation is localized to the context construction logic.
+
+Trait objects provide an alternative when the set of possible implementations is open-ended or when heap allocation is acceptable:
 
 ```rust
 #[derive(HasField)]
 pub struct ProductionApp {
     pub database: Box<dyn DatabaseOps>,
     pub api_client: ProductionApiClient,
-    pub email_sender: ProductionEmailSender,
 }
 ```
 
-The trait object approach provides maximum runtime flexibility at the cost of heap allocation and preventing certain compiler optimizations. The decision about whether to use enums, trait objects, or compile-time parameterization can be made independently for different components based on their specific requirements.
+The trait object approach provides maximum runtime flexibility at the cost of heap allocation and preventing certain compiler optimizations. The decision about whether to use enums, trait objects, or compile-time parameterization can be made independently for different components based on their specific requirements—database backends might use enums for runtime selection, API clients might use separate context types for behavioral differences, and configuration providers might use trait objects for open-ended extensibility.
+
+The key insight this section establishes is that runtime dispatch mechanisms—enums and trait objects—remain valuable tools even in predominantly fission-driven architectures. They solve genuine problems around runtime configuration and open-ended extensibility that compile-time approaches struggle with. The performance overhead of dynamic dispatch becomes a trade-off worth accepting when runtime flexibility is explicitly required rather than a cost imposed on all code unconditionally. The hybrid approach applies dynamic dispatch selectively where it solves concrete problems while maintaining compile-time dispatch elsewhere.
 
 ## Preventing Context Proliferation Through Deliberate Design
 
-The strategies demonstrated above—classical trait implementations, generic parameters, and enums—provide concrete tools for preventing the combinatorial explosion of contexts. Applying these tools effectively requires distinguishing between true variation dimensions representing fundamentally different configurations versus superficial differences that can be parameterized or abstracted away.
+The strategies demonstrated above—classical trait implementations, generic parameters, and enums—provide concrete tools for preventing the combinatorial explosion of contexts that can emerge when every variation dimension demands its own concrete type. Applying these tools effectively requires distinguishing between true variation dimensions representing fundamentally different configurations versus superficial differences that can be parameterized or abstracted away.
 
-True variation exists when different contexts need genuinely different behaviors that cannot be expressed through parameterization—production and mock contexts typically have fundamental behavioral differences justifying separate types. Superficial variation exists when contexts differ only in the concrete types of certain components but behave identically given those types—database backend choice represents superficial variation if all databases are accessed through the same interface.
+True variation exists when different contexts need genuinely different behaviors that cannot be expressed through parameterization. The distinction between `ProductionApp` and `TestApp` represents true variation because they differ in fundamental behaviors: production contexts send real emails through AWS and incur actual costs, while test contexts record emails for verification without external side effects. The difference isn't merely which components they contain but how those components operate and what invariants they maintain. Production contexts must handle network failures, authentication errors, and rate limiting; test contexts must enable assertions about what operations were attempted without actually performing them.
 
-For true variation dimensions, separate context types are justified because behavioral differences make it difficult to share implementations meaningfully. For superficial variation dimensions, applying fusion through generic parameters, enums, or trait objects prevents type proliferation without sacrificing functionality.
+Superficial variation exists when contexts differ only in the concrete types of certain components but behave identically given those types. Database backend choice represents superficial variation when all databases are accessed through the same `DatabaseOps` interface. Whether the application uses PostgreSQL or SQLite affects deployment requirements, performance characteristics, and operational concerns, but the application logic that queries users or stores files remains identical. The `get_user` implementation doesn't need to know which database executes its SQL query; it expresses its requirements through the abstract interface and trusts that any conforming implementation will behave correctly.
 
-Apply fission incrementally based on concrete needs rather than speculatively based on possible future requirements. Start with a minimal set of contexts addressing immediate requirements and split additional contexts only when concrete evidence emerges that the split provides value. If the codebase currently has production and mock contexts but no immediate need for additional variants, resist creating development, staging, or testing contexts "just in case." When new variants become necessary, assess whether they represent true variation requiring new context types or superficial variation that can be parameterized within existing contexts.
+For true variation dimensions, separate context types are justified because behavioral differences make it difficult to share implementations meaningfully. The `send_email` functionality demonstrates this—trying to write a single generic implementation that works for both production's AWS integration and test's verification recording would require contorting the logic to accommodate fundamentally different operations. The fusion approach of using enums or trait objects would force every email-sending operation to pay dynamic dispatch overhead even though the choice between production and test is known statically throughout each binary's lifetime.
+
+For superficial variation dimensions, applying fusion through generic parameters, enums, or trait objects prevents type proliferation without sacrificing functionality. Database backend choice can be parameterized because the variation represents configuration rather than fundamental behavioral difference. Email sending cannot be effectively parameterized because the variation represents genuine operational differences that affect error handling, logging, observability, and testing strategies.
+
+Apply fission incrementally based on concrete needs rather than speculatively based on possible future requirements. Start with the minimal set of contexts addressing immediate requirements—perhaps just `ProductionApp` and `TestApp`—and split additional contexts only when concrete evidence emerges that the split provides value. If the codebase currently has production and test contexts but no immediate need for additional variants, resist creating development, staging, or demo contexts "just in case." When new variants become necessary, assess whether they represent true variation requiring new context types or superficial variation that can be parameterized within existing contexts.
 
 Leverage shared provider components to reduce the effective number of context types requiring management. Even when multiple context types exist, they can share substantial implementation through common provider wiring:
 
@@ -2154,9 +2255,10 @@ Leverage shared provider components to reduce the effective number of context ty
 delegate_components! {
     new SharedDatabaseProviders {
         [
-            QueryUserComponent,
+            GetUserComponent,
             CreateUserComponent,
             UpdateUserComponent,
+            DeleteUserComponent,
         ]:
             StandardDatabaseProviders,
     }
@@ -2164,22 +2266,30 @@ delegate_components! {
 
 delegate_components! {
     ProductionApp {
-        ValueSerializerComponent: UseDelegate<SharedDatabaseProviders>,
+        DatabaseProviderComponent: UseDelegate<SharedDatabaseProviders>,
+        EmailSenderComponent: ProductionEmailSender,
         // Other components...
     }
 }
 
 delegate_components! {
-    MockApp {
-        ValueSerializerComponent: UseDelegate<SharedDatabaseProviders>,
+    TestApp {
+        DatabaseProviderComponent: UseDelegate<SharedDatabaseProviders>,
+        EmailSenderComponent: MockEmailSender,
         // Other components...
     }
 }
 ```
 
-By extracting common provider configurations into shared component bundles, individual context definitions become lightweight wiring specifications rather than complete implementations. This reduces the maintenance burden of multiple contexts while preserving the compile-time guarantees and performance benefits of fission-driven development.
+By extracting common provider configurations into shared component bundles, individual context definitions become lightweight wiring specifications rather than complete implementations. This reduces the maintenance burden of multiple contexts while preserving the compile-time guarantees and performance benefits of fission-driven development. Changes to database-related operations propagate automatically to all contexts using the shared providers, while contexts maintain independence for operations that genuinely differ.
 
-Recognize that some context proliferation is acceptable when it reflects genuine architectural requirements. If an application genuinely needs to support sixteen different deployment configurations with distinct behaviors, creating sixteen context types may be the correct solution despite apparent complexity. The goal is not minimizing the number of contexts at all costs but rather ensuring each context type represents a meaningful configuration providing value. The explosion becomes problematic only when it reflects accidental complexity—when contexts proliferate due to poor factoring of variation dimensions or failure to identify commonalities that could be abstracted. Preventing accidental explosion requires continuous refactoring to consolidate similar contexts and extract common patterns, treating context architecture as an evolving design rather than a fixed initial decision.
+Recognize that some context proliferation is acceptable when it reflects genuine architectural requirements. If an application genuinely needs to support distinct production, staging, development, and testing environments—each with its own authentication mechanisms, logging strategies, and service implementations—then creating four context types may be the correct solution despite apparent complexity. The goal is not minimizing the number of contexts at all costs but rather ensuring each context type represents a meaningful configuration providing value.
+
+The explosion becomes problematic only when it reflects accidental complexity—when contexts proliferate due to poor factoring of variation dimensions or failure to identify commonalities that could be abstracted. If the codebase contains separate contexts for `ProductionWithPostgres`, `ProductionWithSqlite`, `StagingWithPostgres`, `StagingWithSqlite`, `TestWithPostgres`, and `TestWithSqlite`, this proliferation likely indicates that database backend variation should be factored differently rather than requiring six distinct types. Preventing accidental explosion requires continuous refactoring to consolidate similar contexts and extract common patterns, treating context architecture as an evolving design rather than a fixed initial decision.
+
+The deliberate design approach involves regularly asking: Does this context type represent a genuinely different configuration, or have we split too aggressively? Can variation dimensions be factored differently to reduce proliferation while maintaining necessary flexibility? Are we applying fission where fusion would suffice, or maintaining fusion where fission would provide value? These questions drive the iterative refinement that keeps hybrid architectures manageable.
+
+The strategies explored in this chapter—mixing blanket implementations with direct trait implementations, parameterizing superficial variation through generics, introducing runtime selection through enums, and deliberately factoring variation dimensions—enable teams to find their own balance between simplicity and flexibility. The most effective architectures apply each pattern where it provides the most value: fission enables code reuse across genuinely different contexts, fusion prevents unnecessary type proliferation for superficial differences, and the hybrid approach leverages both philosophies strategically rather than dogmatically committing to one paradigm for all situations.
 
 ---
 
