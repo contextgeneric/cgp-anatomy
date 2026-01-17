@@ -1261,22 +1261,48 @@ Accepting CGP's primary complexity means accepting that in systems with genuine 
 
 Having established that multiple contexts represent unavoidable complexity, we turn to abstract types as the first secondary complexity that can be selectively minimized through careful design. Abstract types introduce type-level indirection that transforms concrete type references into associated type lookups, requiring readers to follow chains of delegation to understand what concrete types will actually be used. This indirection creates cognitive overhead that accumulates as the number of abstract types grows and as relationships between them become more complex.
 
+The problem abstract types solve becomes clear when we examine what happens without them. Suppose we want to generalize user management code to work with different user and ID representations across contexts. Without abstract types, this requires introducing type parameters that must appear everywhere the trait is used:
+
+```rust
+pub trait CanQueryUser<UserId, User> {
+    fn get_user(&self, user_id: &UserId) -> Result<User>;
+    fn create_user(&self, email: &EmailAddress) -> Result<User>;
+}
+
+pub trait CanProcessUser<UserId, User> {
+    fn process_user(&self, user_id: &UserId) -> Result<()>;
+}
+
+impl<Context, UserId, User> CanProcessUser<UserId, User> for Context
+where
+    Context: CanQueryUser<UserId, User>,
+{
+    fn process_user(&self, user_id: &UserId) -> Result<()> {
+        let user = self.get_user(user_id)?;
+        // ... process user
+        Ok(())
+    }
+}
+```
+
+Every trait bound must specify both `UserId` and `User` parameters explicitly, creating visual noise and cognitive overhead. More problematically, every trait that builds upon `CanQueryUser` must also be parameterized by these types, even if that trait's specific functionality has nothing to do with user representation details. This viral propagation of type parameters creates maintenance burden—adding, removing, or reordering parameters requires updating every trait and implementation throughout the codebase.
+
 When examining a trait that depends on abstract types, readers cannot immediately determine what concrete types will be used without tracing through the context's type-level configuration. Consider a trait depending on multiple abstract types:
 
-````rust
+```rust
 pub trait CanProcessRequest:
-    HasRequestType +
-    HasResponseType +
+    HasUserIdType +
+    HasUserType +
     HasErrorType
 {
     fn process_request(
         &self,
-        request: Self::Request,
-    ) -> Result<Self::Response, Self::Error>;
+        user_id: &Self::UserId,
+    ) -> Result<Self::User, Self::Error>;
 }
-````
+```
 
-Understanding what `process_request` actually does requires looking up four separate type trait definitions to discover what `Request`, `Response`, `Error`, and `Connection` represent for any given context. This information gathering becomes burdensome as abstract types proliferate, creating cognitive fragmentation where understanding any single piece of code requires assembling information from multiple dispersed locations.
+Understanding what `process_request` actually does requires looking up three separate type trait definitions to discover what `UserId`, `User`, and `Error` represent for any given context. This information gathering becomes burdensome as abstract types proliferate, creating cognitive fragmentation where understanding any single piece of code requires assembling information from multiple dispersed locations.
 
 The cognitive burden intensifies when abstract types have trait bounds referencing other abstract types, creating dependency chains that must be mentally resolved. A type system that tracks these relationships provides safety guarantees, but developers must maintain mental models of complex type-level graphs. For those accustomed to explicit generic parameters where all type relationships are visible in function signatures, this implicit web of constraints can feel disorienting and difficult to navigate.
 
@@ -1284,68 +1310,132 @@ The cognitive burden intensifies when abstract types have trait bounds referenci
 
 The most effective strategy for reducing abstract types' cognitive overhead is using fewer of them. Not every type that could potentially vary between contexts needs abstraction—many types can remain concrete without significantly limiting flexibility or reusability. The key is identifying which types genuinely benefit from abstraction versus which are abstracted speculatively.
 
-Consider a web application handling HTTP requests. The initial temptation might be abstracting over every type involved in request processing: request types, response types, header types, body types, and method types. However, if the application consistently uses standard HTTP types across all contexts, this abstraction provides no actual benefit:
+Consider an application with user management capabilities. The initial temptation might be abstracting over every type involved in user operations: user IDs, user types, error types, database connection types, and authentication token types. However, if the application consistently uses the same ID format and user representation across all contexts, much of this abstraction provides no actual benefit:
 
-````rust
-use http::{Request, Response, HeaderMap, Method};
-
-pub trait CanProcessRequest {
-    fn process_request(
-        &self,
-        request: Request<Vec<u8>>,
-    ) -> Result<Response<Vec<u8>>, Self::Error>;
+```rust
+pub trait CanQueryUser {
+    fn get_user(&self, user_id: &UserId) -> Result<User, Self::Error>;
+    fn create_user(&self, email: &EmailAddress) -> Result<User, Self::Error>;
 }
-````
+```
 
-Using concrete types directly eliminates the abstract type traits and their associated wiring while losing no functionality since all contexts use identical types anyway. The decision about which types to abstract should be guided by concrete evidence of variation: do different contexts actually use different types here, or are we abstracting "just in case"? If the answer is the latter, defer abstraction until actual variation emerges.
+Using concrete types for `UserId` and `User` eliminates two abstract type traits and their associated wiring while losing no functionality since all contexts use identical types anyway. The decision about which types to abstract should be guided by concrete evidence of variation: do different contexts actually use different types here, or are we abstracting "just in case"? If the answer is the latter, defer abstraction until actual variation emerges.
+
+For example, if both `ProductionApp` and `TestApp` use the same `UserId` and `User` types from your domain model, there's no benefit to making them abstract:
+
+```rust
+// Concrete types work fine when all contexts use the same representation
+pub struct ProductionApp {
+    pub database: Database,
+}
+
+pub struct TestApp {
+    pub mock_users: HashMap<UserId, User>,
+}
+
+impl CanQueryUser for ProductionApp {
+    fn get_user(&self, user_id: &UserId) -> Result<User, Self::Error> {
+        // Query real database
+    }
+}
+
+impl CanQueryUser for TestApp {
+    fn get_user(&self, user_id: &UserId) -> Result<User, Self::Error> {
+        // Return from mock storage
+    }
+}
+```
+
+Both contexts can implement the same trait using the same concrete types, even though their implementation strategies differ. The contexts vary in how they retrieve users, not in what types represent users.
+
+Abstract types become valuable when contexts genuinely need different type representations. For instance, if some contexts work with full `User` objects while others work with lightweight `UserSummary` objects for performance reasons, then abstracting the user type enables both patterns to coexist:
+
+```rust
+#[cgp_type]
+pub trait HasUserType {
+    type User;
+}
+
+pub trait CanQueryUser: HasUserType {
+    fn get_user(&self, user_id: &UserId) -> Result<Self::User, Self::Error>;
+}
+```
 
 A complementary strategy involves grouping related abstract types into type collections that vary together. Instead of separate abstract type traits for every component, define single traits providing all related types:
 
-````rust
+```rust
 #[cgp_type]
-pub trait HasHttpTypes {
-    type Request;
-    type Response;
-    type Error;
+pub trait HasUserTypes {
+    type UserId: Clone + PartialEq;
+    type User;
 }
-````
+```
 
-This reduces the number of separate traits to understand and wire while making relationships between types more explicit. When developers see a context implementing `HasHttpTypes`, they immediately know it provides a complete collection of HTTP-related types designed to work together, rather than needing to verify that separate request, response, and error types are compatible.
+This reduces the number of separate traits to understand and wire while making relationships between types more explicit. When developers see a context implementing `HasUserTypes`, they immediately know it provides a complete collection of user-related types designed to work together, rather than needing to verify that separate user and ID types are compatible.
 
-The trade-off is reduced flexibility—type collections make it awkward to customize only some types while using standard implementations for others. However, types that must interoperate closely are rarely customized independently, making this flexibility loss acceptable for the cognitive simplification gained.
+The trade-off is reduced flexibility—type collections make it awkward to customize only some types while using standard implementations for others. However, types that must interoperate closely are rarely customized independently. A `UserId` type is inherently designed to identify instances of its corresponding `User` type, making these types natural candidates for grouping. This pairing makes the flexibility loss acceptable for the cognitive simplification gained.
 
 ### Trade-offs Between Type Safety and Simplicity
 
 Abstract types represent a trade-off between type-level safety and conceptual simplicity. They provide strong guarantees that related types are consistent across contexts, achieving this safety through indirection and cognitive overhead. Sometimes accepting weaker guarantees in exchange for simpler code is the right choice.
 
-Consider error handling in a large application. The most type-safe approach uses abstract error types throughout:
+Consider user ID handling in a large application. The most type-safe approach uses abstract ID types throughout:
 
-````rust
+```rust
+#[cgp_type]
+pub trait HasUserIdType {
+    type UserId: Clone + PartialEq + Debug;
+}
+
+pub trait CanQueryUser: HasUserIdType {
+    fn get_user(&self, user_id: &Self::UserId) -> Result<User>;
+}
+```
+
+This ensures ID types are consistent and compiler-verified across all user operations. However, it requires `UserId` appearing in almost every user-related trait bound, creating visual noise and requiring every context to wire a user ID type even when ID handling is straightforward.
+
+An alternative accepts some type safety loss for simplicity by using concrete ID types:
+
+```rust
+use uuid::Uuid;
+
+pub trait CanQueryUser {
+    fn get_user(&self, user_id: &Uuid) -> Result<User>;
+}
+```
+
+Using `Uuid` directly eliminates the abstract user ID type entirely, simplifying trait definitions and removing ID type wiring needs. The trade-off is that contexts cannot use different ID representations—everything must use UUIDs. For applications where this standardization is acceptable (and often desirable for consistency), this precision loss is a reasonable price for significant complexity reduction.
+
+Consider also error handling in user operations. The most type-safe approach uses abstract error types:
+
+```rust
 #[cgp_type]
 pub trait HasErrorType {
     type Error: Debug;
 }
 
-pub trait CanProcessData: HasErrorType {
-    fn process_data(&self, data: &[u8]) -> Result<Vec<u8>, Self::Error>;
+pub trait CanQueryUser: HasUserIdType + HasErrorType {
+    fn get_user(&self, user_id: &Self::UserId) -> Result<User, Self::Error>;
 }
-````
+```
 
 This ensures error types are consistent and compiler-verified. However, it requires `Error` appearing in almost every trait bound, creating visual noise and requiring every context to wire an error type even when error handling is straightforward.
 
 An alternative accepts some type safety loss for simplicity by using concrete error types:
 
-````rust
+```rust
 use anyhow::Result;
 
-pub trait CanProcessData {
-    fn process_data(&self, data: &[u8]) -> Result<Vec<u8>>;
+pub trait CanQueryUser {
+    fn get_user(&self, user_id: &UserId) -> Result<User>;
 }
-````
+```
 
 Using `anyhow::Result` eliminates the abstract error type entirely, simplifying trait definitions and removing error type wiring needs. The trade-off is that contexts cannot use different error types, and error handling becomes less precise. For applications where errors mostly propagate upward rather than requiring specific matching, this precision loss is acceptable for significant complexity reduction.
 
-The key insight is that abstract versus concrete type choice is not all-or-nothing. Different types in the same system can make different choices based on actual variation needs. Critical types where contexts genuinely differ justify abstraction overhead. Supporting types where all contexts use the same implementation may not warrant abstraction despite being technically "configurable."
+The key insight is that abstract versus concrete type choice is not all-or-nothing. Different types in the same system can make different choices based on actual variation needs. User and ID types where contexts genuinely differ in their representations justify abstraction overhead. Supporting types like timestamps, email addresses, or error types where all contexts use the same implementation may not warrant abstraction despite being technically "configurable."
+
+The decision-making process should be pragmatic: start with concrete types, and only introduce abstraction when concrete evidence emerges that different contexts need different type representations. A production context using `User` structs and a test context using `MockUser` structs represents concrete evidence justifying user type abstraction. But if both contexts use the same `User` type from your domain model, the abstraction provides no benefit and only adds complexity.
 
 ## Secondary Complexity: Configurable Static Dispatch
 
@@ -1400,16 +1490,7 @@ where
     Context: HasDatabase,
 {
     fn get_user(&self, user_id: &UserId) -> Result<User> {
-        let row = self.database().query_row(
-            "SELECT id, email, name, created_at FROM users WHERE id = $1",
-            &[user_id],
-        )?;
-        Ok(User {
-            id: row.get(0)?,
-            email: row.get(1)?,
-            name: row.get(2)?,
-            created_at: row.get(3)?,
-        })
+        // SQL query using self.database()
     }
 }
 ````
@@ -1425,15 +1506,13 @@ When functionality requires context-specific implementations that aren't reused 
 ````rust
 impl CanSendEmail for ProductionApp {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        self.api_client.send_email_via_aws(recipient, message)?;
-        Ok(())
+        // Send email using self.api_client (AwsApiClient)
     }
 }
 
 impl CanSendEmail for TestApp {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        self.api_client.record_email_for_verification(recipient, message);
-        Ok(())
+        // Record email for later inspection
     }
 }
 ````
@@ -1464,8 +1543,7 @@ where
     Context: HasAwsApiClient,
 {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        self.aws_api_client().send_email_via_aws(recipient, message)?;
-        Ok(())
+        // Send email using context.aws_api_client()
     }
 }
 
@@ -1475,25 +1553,183 @@ where
     Context: HasMockApiClient,
 {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        self.mock_api_client().record_email_for_verification(recipient, message);
-        Ok(())
+        // Record email using context.mock_api_client()
     }
 }
 
 delegate_components! {
     ProductionApp {
-        EmailSenderComponent: SendEmailWithAws,
+        EmailSenderComponent:
+            SendEmailWithAws,
     }
 }
 
 delegate_components! {
     TestApp {
-        EmailSenderComponent: MockSendEmail,
+        EmailSenderComponent:
+            MockSendEmail,
     }
 }
 ````
 
 The provider-based approach introduces multiple additional constructs: the `EmailSenderComponent` type generated by `#[cgp_component]`, the provider structs `SendEmailWithAws` and `MockSendEmail`, additional getter traits for accessing the API clients, and the delegation wiring. All this machinery exists to solve a problem that doesn't exist in this scenario—there are no multiple implementations that need to be selected from or composed together.
+
+The direct implementation approach becomes particularly attractive when implementations are truly context-specific and unlikely to be reused. If `SendEmailWithAws` will only ever be used with `ProductionApp` and `MockSendEmail` only with `TestApp`, the indirection through providers and component wiring provides no benefit—it only adds visual noise and cognitive overhead without enabling any additional flexibility.
+
+### Plain Function Alternative to Configurable Dispatch
+
+When different contexts genuinely require different implementations—but those implementations can be expressed as reusable logic—an intermediate approach exists between direct trait implementation and full configurable dispatch: extracting the implementation logic into plain functions that trait implementations forward to. This pattern provides code reuse without requiring understanding of CGP's provider machinery.
+
+Consider a more complex scenario where an application needs to support multiple database backends:
+
+````rust
+pub struct CloudApp {
+    pub database: Postgres,
+    pub api_client: AwsApiClient,
+}
+
+pub struct EmbeddedApp {
+    pub database: Sqlite,
+    pub api_client: AwsApiClient,
+}
+
+pub struct TestApp {
+    pub database: Sqlite,
+    pub api_client: MockApiClient,
+}
+````
+
+Now the user querying functionality needs different implementations—PostgreSQL and SQLite require different SQL dialects and connection handling. However, both `EmbeddedApp` and `TestApp` share the same `Sqlite` database type, meaning they should share the same query implementation to avoid code duplication.
+
+The plain function approach extracts the database-specific logic into standalone functions:
+
+````rust
+pub trait CanQueryUser {
+    fn query_user(&self, user_id: &UserId) -> Result<User>;
+}
+
+pub fn query_user_with_postgres(database: &Postgres, user_id: &UserId) -> Result<User> {
+    // PostgreSQL-specific SQL query
+    let row = database.query("SELECT * FROM users WHERE id = $1", &[user_id])?;
+    Ok(User::from_row(row))
+}
+
+pub fn query_user_with_sqlite(database: &Sqlite, user_id: &UserId) -> Result<User> {
+    // SQLite-specific SQL query
+    let row = database.query("SELECT * FROM users WHERE id = ?", &[user_id])?;
+    Ok(User::from_row(row))
+}
+
+impl CanQueryUser for CloudApp {
+    fn query_user(&self, user_id: &UserId) -> Result<User> {
+        query_user_with_postgres(&self.database, user_id)
+    }
+}
+
+impl CanQueryUser for EmbeddedApp {
+    fn query_user(&self, user_id: &UserId) -> Result<User> {
+        query_user_with_sqlite(&self.database, user_id)
+    }
+}
+
+impl CanQueryUser for TestApp {
+    fn query_user(&self, user_id: &UserId) -> Result<User> {
+        query_user_with_sqlite(&self.database, user_id)
+    }
+}
+````
+
+This approach successfully achieves code reuse—both `EmbeddedApp` and `TestApp` call the same `query_user_with_sqlite` function, avoiding duplication. The trait implementations become thin wrappers that simply forward to the appropriate function, making it obvious which implementation each context uses. No understanding of provider traits or component wiring is required.
+
+However, this pattern reveals its verbosity when compared to the CGP equivalent using configurable dispatch:
+
+````rust
+#[cgp_component(UserQuerier)]
+pub trait CanQueryUser {
+    fn query_user(&self, user_id: &UserId) -> Result<User>;
+}
+
+#[cgp_auto_getter]
+pub trait HasPostgres {
+    fn postgres(&self) -> &Postgres;
+}
+
+#[cgp_auto_getter]
+pub trait HasSqlite {
+    fn sqlite(&self) -> &Sqlite;
+}
+
+#[cgp_impl(new QueryUserWithPostgres)]
+impl<Context> UserQuerier for Context
+where
+    Context: HasPostgres,
+{
+    fn query_user(&self, user_id: &UserId) -> Result<User> {
+        let database = self.postgres();
+        // PostgreSQL-specific SQL query
+    }
+}
+
+#[cgp_impl(new QueryUserWithSqlite)]
+impl<Context> UserQuerier for Context
+where
+    Context: HasSqlite,
+{
+    fn query_user(&self, user_id: &UserId) -> Result<User> {
+        let database = self.sqlite();
+        // SQLite-specific SQL query
+    }
+}
+
+delegate_components! {
+    CloudApp {
+        UserQuerierComponent:
+            QueryUserWithPostgres,
+    }
+}
+
+delegate_components! {
+    EmbeddedApp {
+        UserQuerierComponent:
+            QueryUserWithSqlite,
+    }
+}
+
+delegate_components! {
+    TestApp {
+        UserQuerierComponent:
+            QueryUserWithSqlite,
+    }
+}
+````
+
+The CGP approach introduces additional constructs—the `UserQuerierComponent` type, the provider structs, getter traits, and delegation blocks. However, it eliminates the need to write separate trait implementation blocks for each context. More importantly, the CGP approach scales better: if a fourth context needs to be added that uses PostgreSQL, only a new `delegate_components!` block is required, whereas the plain function approach requires writing another complete trait implementation.
+
+The trade-off becomes clear: the plain function approach requires less upfront understanding of CGP machinery but creates more boilerplate as contexts proliferate. The CGP approach requires understanding provider traits and component wiring but reduces per-context boilerplate to a simple delegation declaration. For codebases with two or three contexts, the plain function approach may be simpler. For codebases with many contexts sharing implementations, configurable dispatch provides clearer organization and less repetition.
+
+### When Configurable Dispatch Provides Value
+
+The examples above reveal clear criteria for when configurable dispatch justifies its complexity:
+
+**Use configurable dispatch when:**
+
+1. **Multiple implementations exist** - There are genuinely different ways to implement a capability (PostgreSQL vs SQLite queries, AWS vs mock email sending)
+
+2. **Implementations are reused across contexts** - Multiple contexts need the same implementation (both `EmbeddedApp` and `TestApp` using SQLite queries)
+
+3. **Contexts have different requirements** - Different contexts need different implementations of the same trait (production needs real email sending, tests need mock email sending)
+
+**Avoid configurable dispatch when:**
+
+1. **One implementation suffices** - All contexts can use the same generic implementation through blanket traits (database access when all contexts use the same `Database` type)
+
+2. **Implementations are context-specific** - Each implementation is only used by one context and unlikely to be reused (custom business logic specific to production or test environments)
+
+3. **Simple forwarding works** - Plain functions can provide reusable logic with minimal boilerplate (when there are only two or three contexts)
+
+The key insight is recognizing that configurable dispatch is an optimization for a specific problem: enabling code reuse when multiple contexts need to select from multiple available implementations. When this problem doesn't exist—either because there's only one implementation, or because implementations aren't reused across contexts—the machinery of configurable dispatch creates unnecessary complexity without providing compensating benefits.
+
+This selective application of configurable dispatch represents a crucial skill for managing CGP complexity. Rather than treating CGP as an all-or-nothing proposition where every trait becomes a component with providers and wiring, developers should recognize it as a toolbox where different patterns suit different situations. Blanket traits, direct implementations, plain functions, and configurable dispatch each have appropriate use cases, and skilled CGP practitioners learn to recognize which tool fits each situation.
 
 ## Secondary Complexity: Getter Traits
 
