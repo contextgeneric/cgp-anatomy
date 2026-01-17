@@ -2038,15 +2038,29 @@ The next chapter builds on these integration strategies by providing concrete gu
 
 # Chapter 11: Incremental Adoption Strategy
 
-For teams that have reached the minimum viable agreements about managing multiple contexts and are ready to transition from fusion-driven to fission-driven development, the crucial question becomes: how do we get there from here? This chapter provides concrete strategies for incremental adoption that minimize disruption while building team experience with context-generic patterns. The approach centers on precision refactoring—identifying specific methods and traits that demonstrate clear friction under fusion patterns, extracting them into context-generic implementations, and allowing the conceptual shift to happen gradually through accumulated experience rather than requiring immediate wholesale conversion.
+For teams that recognize CGP's potential value and understand the fusion-fission framework from previous chapters, the critical question becomes execution: how do you actually transition from fusion-driven patterns to fission-driven development? This chapter provides the tactical roadmap. We assume you've internalized the conceptual foundation—that multiple contexts can be beneficial, that variation should sometimes be solved through splitting rather than merging, and that hybrid approaches offer practical paths forward. Now we focus on the mechanics of adoption: where to start, how to refactor safely, and how to manage the inevitable transition period when your codebase exists partly in each paradigm.
 
-## Identifying Candidates for Context Splitting
+## The Incremental Adoption Mindset
 
-The first step in incremental adoption involves identifying which parts of an existing fusion-driven codebase would benefit most from fission. This identification process examines concrete friction points where fusion patterns actively create problems—where variation is forced into uncomfortable compromises, where code duplication proliferates despite efforts to avoid it, or where extending functionality requires coordinated changes across many locations.
+Before examining specific refactoring techniques, establish the strategic foundation that makes incremental adoption possible. The core principle is deceptively simple: start with the smallest change that provides demonstrable value, prove that value through experience, then expand based on evidence rather than speculation. This principle prevents the common failure mode where teams attempt wholesale conversion, become overwhelmed by the scope, and abandon the effort after investing substantial time without seeing concrete benefits.
+
+Successful adoption requires accepting that you will make imperfect decisions. You will sometimes extract abstractions that prove unnecessary, split traits that should have remained unified, or wait too long before addressing duplication that context-generic implementations could have eliminated. These mistakes are inevitable learning experiences rather than signs of failure. What matters is maintaining the ability to course-correct as your understanding improves. Design for reversibility—make refactoring choices that can be undone with reasonable effort if they prove misguided.
+
+The learning progression follows a predictable path. Initially, developers resist context-generic patterns as unnecessary complexity compared to familiar concrete implementations. They mechanically apply the patterns without internalizing why they provide value. Gradually, through repeated exposure to situations where CGP eliminates duplication or enables easier extension, recognition of benefits emerges. Eventually, the fission-driven mindset becomes internalized where splitting contexts and writing generic code feels natural rather than forced. This progression cannot be rushed—different developers move through these stages at different rates depending on their backgrounds and learning styles.
+
+## Identifying Your Starting Point
+
+The first practical step involves identifying which parts of your existing codebase would benefit most from fission. Rather than attempting to convert everything, look for specific friction points where fusion patterns actively create problems. Three characteristic signals indicate promising candidates for initial extraction.
+
+Testing duplication friction emerges when test contexts reproduce business logic identically with only external service implementations changing. If your mock or test implementations contain copy-pasted methods that differ only in which concrete types they call, that duplication signals reusable logic trapped in concrete implementations. These methods can be extracted into context-generic implementations that work across both production and test contexts.
+
+Environment variation friction appears when different deployment contexts require different service implementations managed through complex configuration or feature flags. When this variation spans multiple dimensions—database backends, API endpoints, storage providers, logging systems—the fusion approach creates combinatorial configuration complexity. Each new deployment environment requires checking and potentially updating configuration across all these dimensions. Context-generic code with separate typed contexts eliminates this combinatorial explosion.
+
+Extension coordination friction manifests when adding capabilities requires modifying multiple locations: the context struct gains new fields, initialization code must configure those fields, multiple method implementations need updates, and test mocks require corresponding changes. This coupling indicates that the monolithic structure has become a bottleneck where concerns that should vary independently are artificially unified through the single context type.
 
 Consider a typical monolithic application context that has evolved through fusion-driven development:
 
-````rust
+```rust
 pub struct Application {
     pub database: PostgresDatabase,
     pub api_client: ProductionApiClient,
@@ -2073,38 +2087,30 @@ pub trait ApplicationServices {
 impl ApplicationServices for Application {
     // Implementation of all methods directly on Application
 }
-````
+```
 
-This monolithic structure creates three characteristic friction points that signal opportunities for fission:
+Examine the actual dependencies of each method to identify strong candidates for extraction. Methods that operate primarily on a single dependency through a well-defined interface are ideal starting points:
 
-**Testing duplication friction** emerges when creating `MockApplication` types that duplicate most of `ApplicationServices` implementation with only minor modifications. If test contexts reproduce business logic identically but swap out external service implementations, this indicates reusable logic trapped in concrete implementations that could be extracted into context-generic code.
-
-**Environment variation friction** appears when different deployment contexts (production, staging, development) require different service implementations managed through runtime configuration or feature flags. When this variation spans multiple dimensions—database backend, API endpoints, storage providers—the fusion approach creates combinatorial configuration complexity that fission could eliminate through separate typed contexts.
-
-**Extension coordination friction** manifests when adding capabilities requires modifying the context struct, updating initialization code, changing multiple method implementations, and updating test mocks. This coupling indicates that the monolithic structure has become a bottleneck where concerns that should vary independently are artificially unified.
-
-To identify specific methods benefiting from context-generic implementation, examine actual dependencies:
-
-````rust
-// Methods using only database - strong candidates for extraction
+```rust
+// Methods using only database - strong candidates
 fn create_user(&self, email: &EmailAddress) -> Result<User>
 fn get_user(&self, user_id: &UserId) -> Result<User>
 fn update_user(&self, user_id: &UserId, updates: UserUpdates) -> Result<()>
 fn delete_user(&self, user_id: &UserId) -> Result<()>
 
-// Methods coordinating multiple services - keep concrete for now
+// Methods coordinating multiple services - keep concrete initially
 fn send_notification(&self, user_id: &UserId, notification: Notification) -> Result<()>
-````
+```
 
-Methods operating on a single dependency through a well-defined interface are ideal initial candidates. Methods coordinating multiple services or implementing context-specific orchestration logic should remain concrete until compelling evidence emerges that they can be usefully generalized.
+Methods implementing complex orchestration logic that coordinates multiple services or contains context-specific business rules should remain concrete until compelling evidence emerges that they can be usefully generalized. Start with proven duplication rather than speculative future reuse—wait until you actually have multiple contexts needing the same functionality before investing in abstraction.
 
-## Precision Refactoring: From Concrete to Context-Generic
+## The Refactoring Cycle
 
-Once candidates are identified, the refactoring process extracts specific cohesive functionality while leaving surrounding code unchanged. The key insight: fission applies at the granularity of individual methods or small groups, not requiring wholesale trait conversion.
+Once you have identified candidate methods showing clear duplication, the extraction process follows a consistent pattern designed to minimize risk while maintaining backward compatibility. The key insight is that fission applies at the granularity of individual methods or small method groups, not requiring wholesale conversion of entire traits.
 
-For user management methods identified as candidates, create a focused trait capturing just these operations:
+For the user management methods identified as strong candidates, create a focused trait capturing just these operations:
 
-````rust
+```rust
 pub trait HasDatabase {
     type Database: DatabaseOps;
 
@@ -2140,13 +2146,13 @@ where
         self.database().delete_user(user_id)
     }
 }
-````
+```
 
-This extraction follows three principles: narrow scope containing only the methods being converted, minimal dependencies through simple getter traits rather than complex requirements, and preservation of backward compatibility by keeping the original trait intact.
+This extraction follows three essential principles. First, maintain narrow scope by containing only the methods being converted rather than attempting to abstract everything simultaneously. Second, minimize dependencies through simple getter traits rather than complex requirements that would complicate implementation. Third, preserve backward compatibility by keeping the original trait structure intact so existing code continues working unchanged.
 
-Update the original monolithic trait to delegate rather than duplicate:
+Update the original monolithic trait to delegate to the new context-generic implementation rather than duplicating logic:
 
-````rust
+```rust
 pub trait ApplicationServices: UserServices {
     fn fetch_file(&self, file_id: &FileId) -> Result<Vec<u8>>;
     fn store_file(&self, content: Vec<u8>) -> Result<FileId>;
@@ -2173,13 +2179,13 @@ impl ApplicationServices for Application {
         Ok(())
     }
 }
-````
+```
 
-User management methods are removed from the concrete implementation—they're now inherited through the `UserServices` supertrait. Methods remaining in the concrete implementation genuinely need context-specific behavior.
+The user management methods disappear from the concrete implementation—they are now inherited through the `UserServices` supertrait bound. Only methods that genuinely need context-specific behavior remain in the concrete implementation. This separation makes the architecture more honest: the distinction between generic and context-specific becomes explicit rather than obscured behind uniform concrete implementations.
 
-Enable the context-generic implementation by implementing the getter:
+Enable the context-generic implementation by implementing the minimal getter requirement:
 
-````rust
+```rust
 impl HasDatabase for Application {
     type Database = PostgresDatabase;
 
@@ -2187,13 +2193,13 @@ impl HasDatabase for Application {
         &self.database
     }
 }
-````
+```
 
-This straightforward field access requires minimal code. Existing code calling methods on `Application` continues working unchanged—the user management methods remain available through trait inheritance despite their implementation moving to a generic blanket impl.
+This straightforward field access requires minimal code and makes the dependency explicit. Existing code calling methods on `Application` continues working unchanged—the user management methods remain available through trait inheritance despite their implementation moving to a generic blanket implementation. The compilation ensures type safety throughout: if the getter implementation were incorrect or if the blanket implementation made assumptions the concrete type cannot satisfy, compilation would fail with clear error messages.
 
-The benefit emerges when creating test contexts:
+The benefit emerges immediately when creating test contexts:
 
-````rust
+```rust
 pub struct TestApplication {
     pub database: MockDatabase,
     pub api_client: MockApiClient,
@@ -2225,44 +2231,19 @@ impl ApplicationServices for TestApplication {
         Ok(())
     }
 }
-````
+```
 
-`TestApplication` automatically gains all user management methods through the context-generic `UserServices` implementation without any duplication. The test context only provides its own implementations for methods that genuinely differ in testing scenarios.
+The `TestApplication` automatically gains all user management methods through the context-generic `UserServices` implementation without any duplication. The test context provides its own implementations only for methods that genuinely differ in testing scenarios. More importantly, when you later discover a bug in user creation logic and fix it in the blanket implementation, that fix automatically propagates to all contexts including tests—eliminating the maintenance burden of keeping duplicate implementations synchronized.
 
-The precision refactoring approach enables gradual expansion. If file operations later show similar duplication patterns, extract them into `FileServices` following the same pattern, without modifying the already-refactored `UserServices` or remaining `ApplicationServices` methods. This composability allows incremental fission as experience grows and additional opportunities emerge.
+## Managing the Transition Period
 
-## Gradual Mindset Transition
+The refactoring cycle described above enables gradual expansion as experience grows and additional opportunities emerge. If file operations later show similar duplication patterns, extract them into `FileServices` following the same pattern without modifying the already-refactored `UserServices` or remaining `ApplicationServices` methods. This composability allows you to incrementally convert methods as concrete evidence of their reusability emerges, rather than requiring upfront commitment to comprehensive abstraction.
 
-Beyond mechanical refactoring, successful adoption requires conceptual transition in how developers think about architecture. The fusion-driven mindset emerged from rational responses to language constraints, not ignorance. Shifting to fission-driven thinking requires internalizing new intuitions about when to split contexts, how to design abstractions, and what constitutes good boundaries. This transition happens gradually through experience rather than intellectual understanding alone.
+During this transition period, your codebase will contain a mixture of context-generic and context-specific implementations. This hybrid state is not merely acceptable but desirable—it reflects pragmatic decisions about where abstraction provides value. However, this mixed state requires conscious management to prevent it from becoming a source of confusion rather than clarity.
 
-Core beliefs that must be progressively reframed:
+One practical challenge involves deciding when to split comprehensive traits into focused capabilities. Consider a trait grouping related operations:
 
-- **"One application context"** → **"As many contexts as meaningfully different configurations"**
-- **"Concrete implementations by default"** → **"Generic implementations when logic is reusable"**
-- **"Comprehensive abstractions"** → **"Minimal, composable abstractions"**
-- **"Direct field access"** → **"Access through getter traits for structural independence"**
-
-These conceptual shifts require repeated exposure to situations where fission-driven approaches provide tangible benefits, building intuition through experience. The learning process follows a predictable progression:
-
-**Stage 1: Resistance** - Developers initially resist fission patterns as unnecessary complexity compared to familiar fusion. They question why multiple contexts are needed when enums or feature flags could handle variation. This resistance is natural and reflects genuine cognitive load from unfamiliar patterns.
-
-**Stage 2: Mechanical Application** - Developers understand how patterns work mechanically without necessarily internalizing why they provide value. They can write blanket implementations and use getter traits correctly but view them as elaborate machinery rather than natural architectural expression.
-
-**Stage 3: Recognition of Benefits** - Through repeated exposure, developers begin recognizing concrete benefits. They notice adding a staging environment requires minimal changes because most logic is already context-generic, or that refactoring becomes easier because changes to generic implementations automatically propagate.
-
-**Stage 4: Internalization** - Eventually, developers internalize the fission-driven mindset where it feels natural. They instinctively ask "could this be context-generic?" when implementing new functionality and recognize fission opportunities before fusion patterns create visible pain.
-
-This progression cannot be rushed. Different developers move through stages at different rates depending on background and learning style. The incremental strategy accommodates this variation by allowing developers to work at their current understanding level while gradually exposing them to more advanced applications.
-
-Pair programming sessions where experienced practitioners explain their reasoning process for extracting context-generic traits make rationale visible in ways documentation cannot capture. Retrospectives after refactoring cycles should focus not just on technical outcomes but subjective experiences: did refactoring make code easier or harder to understand, did it reduce or increase maintenance burden, did it enable new capabilities or constrain existing ones?
-
-The gradual transition requires accepting that fission and fusion patterns will coexist during the transition period and potentially indefinitely. Not all code benefits from context-generic implementation. Mature CGP use involves knowing when to apply fission and when to maintain fusion, making conscious decisions about which patterns serve each specific context rather than dogmatically applying one approach everywhere.
-
-## Balancing Trait Granularity
-
-A practical challenge during adoption involves deciding when to split traits versus keeping them unified. Consider a trait grouping related operations:
-
-````rust
+```rust
 pub trait OrderManagement {
     fn create_order(&self, items: Vec<OrderItem>) -> Result<OrderId>;
     fn get_order(&self, order_id: OrderId) -> Result<Order>;
@@ -2271,13 +2252,13 @@ pub trait OrderManagement {
     fn calculate_total(&self, order_id: OrderId) -> Result<Money>;
     fn apply_discount(&self, order_id: OrderId, discount: Discount) -> Result<()>;
 }
-````
+```
 
-Immediately splitting into six single-method traits maximizes flexibility but creates discovery difficulties, implementation overhead, and broader change surface. Maintaining complete unification forces contexts to implement all methods or use stubs, obscuring true capabilities.
+Immediately splitting this into six single-method traits maximizes flexibility but creates practical difficulties: developers struggle to discover related capabilities scattered across many traits, implementation overhead grows as each trait requires separate implementation blocks, and changes affecting multiple related operations require modifying multiple trait definitions. Maintaining complete unification forces contexts to implement all methods or provide stub implementations that obscure which capabilities contexts actually support.
 
-The pragmatic approach: start unified, split only when concrete evidence emerges. Initially implement the trait on production and test contexts. Only when discovering frequent need for contexts supporting querying and calculation but not modification (perhaps for read-only reporting) does splitting become justified:
+The pragmatic approach balances these concerns: start with unified traits and split only when concrete evidence emerges that separation provides value. Initially implement the monolithic `OrderManagement` trait on both production and test contexts. Monitor actual usage patterns over weeks or months. Only when you discover frequent need for contexts supporting querying and calculation but not modification—perhaps for read-only reporting dashboards—does splitting become justified:
 
-````rust
+```rust
 pub trait OrderQuerying {
     fn get_order(&self, order_id: OrderId) -> Result<Order>;
     fn calculate_total(&self, order_id: OrderId) -> Result<Money>;
@@ -2291,18 +2272,21 @@ pub trait OrderModification {
 }
 
 pub trait OrderManagement: OrderQuerying + OrderModification {}
-````
+```
 
-This preserves backward compatibility—existing code depending on `OrderManagement` continues working as that trait now bundles the focused traits. New code needing only querying depends on just `OrderQuerying`. The architecture becomes more flexible without disrupting existing usage.
+This split preserves backward compatibility—existing code depending on `OrderManagement` continues working as that trait now bundles the focused traits through supertrait bounds. New code needing only querying capabilities depends solely on `OrderQuerying`, making requirements more precise. The architecture becomes more flexible without disrupting existing usage.
 
-Wait until traits have stabilized—typically weeks or months without modifications—before investing in context-generic implementations. This ensures abstraction overhead pays dividends through reuse rather than becoming a tax on ongoing development. The exception: when context-generic implementations would immediately eliminate visible duplication, benefits justify upfront cost even for traits that might evolve.
+Wait until traits have achieved reasonable stability—typically weeks or months without modifications—before investing in context-generic implementations. This patience ensures that abstraction overhead pays dividends through reuse rather than becoming a tax on ongoing development. The exception is when context-generic implementations would immediately eliminate visible duplication between existing contexts; in such cases, the benefits justify upfront investment even for traits that might evolve.
 
-Create safety through comprehensive test coverage, continuous integration, and incremental deployment practices making refactoring feel safe rather than risky. When refactoring feels like navigating a minefield, teams naturally become conservative, avoiding beneficial changes because risk seems too high.
+Building team confidence requires celebrating wins during the transition. When a bug fix in generic code automatically propagates to all contexts, when adding a staging environment requires minimal changes because most logic is already context-generic, or when refactoring becomes easier because abstractions have already established clean boundaries—these concrete successes build intuition more effectively than abstract arguments about architectural benefits. Use retrospectives after refactoring cycles to discuss not just technical outcomes but subjective experiences: did refactoring make code easier or harder to understand, did it reduce or increase maintenance burden, did it enable new capabilities or constrain existing ones?
 
-Accept that perfect foresight is impossible. Teams will sometimes split traits too early, creating abstractions never reused. They'll sometimes wait too long, allowing duplication to accumulate. They'll sometimes choose wrong boundaries for context splitting. These mistakes are inevitable parts of learning rather than signs of failure. The ability to refactor and correct course as understanding improves matters more than making perfect initial decisions.
+## Conclusion
 
-The incremental adoption strategy succeeds not by eliminating challenges but by making them manageable. By applying fission selectively based on concrete evidence, allowing conceptual transition through experience, and balancing stability against flexibility through pragmatic decisions, teams can successfully navigate the shift while maintaining productive delivery throughout the transition. The result is a hybrid architecture applying each pattern where it provides most value, with wisdom to distinguish cases developing through practice and reflection.
+The incremental adoption strategy succeeds by making CGP's challenges manageable through selective application based on concrete evidence. Start with methods showing clear duplication across contexts, extract them into focused context-generic traits with minimal dependencies, and expand gradually as experience grows and additional opportunities emerge. Accept that the transition period will involve hybrid architectures mixing context-generic and context-specific implementations—this mixed state reflects pragmatic decisions about where abstraction provides value rather than indicating incomplete migration.
 
+The key insight is recognizing that successful adoption is less about mastering CGP's technical details than about building team experience with fission-driven thinking through practice. Developers learn to recognize opportunities for context splitting, to design focused abstractions, and to make informed decisions about when fission provides value over fusion. This learning happens through accumulated experience rather than intellectual understanding alone, which is why incremental adoption starting with small, low-risk refactorings proves more effective than ambitious wholesale conversion attempts.
+
+With the tactical execution strategy established, the next chapter synthesizes the report's findings into actionable recommendations. We examine the minimum viable agreements teams need before CGP adoption can succeed, address remaining concerns about framework dependency and lock-in, and identify the most promising directions for future development that could make fission-driven patterns more accessible to the broader Rust community.
 ---
 
 # Chapter 12: Conclusions and Recommendations
