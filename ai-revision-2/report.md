@@ -1836,7 +1836,9 @@ impl<Database> HasDatabase for ProductionApp<Database>
 where
     Database: DatabaseOps,
 {
-    fn database(&self) -> &dyn DatabaseOps {
+    type Database = Database;
+
+    fn database(&self) -> &Database {
         &self.database
     }
 }
@@ -2103,12 +2105,13 @@ Once candidates are identified, the refactoring process extracts specific cohesi
 For user management methods identified as candidates, create a focused trait capturing just these operations:
 
 ````rust
-#[cgp_auto_getter]
 pub trait HasDatabase {
-    fn database(&self) -> &Database;
+    type Database: DatabaseOps;
+
+    fn database(&self) -> &Self::Database;
 }
 
-pub trait UserServices: HasDatabase {
+pub trait UserServices {
     fn create_user(&self, email: &EmailAddress) -> Result<User>;
     fn get_user(&self, user_id: &UserId) -> Result<User>;
     fn update_user(&self, user_id: &UserId, updates: UserUpdates) -> Result<()>;
@@ -2178,7 +2181,9 @@ Enable the context-generic implementation by implementing the getter:
 
 ````rust
 impl HasDatabase for Application {
-    fn database(&self) -> &Database {
+    type Database = PostgresDatabase;
+
+    fn database(&self) -> &PostgresDatabase {
         &self.database
     }
 }
@@ -2196,7 +2201,9 @@ pub struct TestApplication {
 }
 
 impl HasDatabase for TestApplication {
-    fn database(&self) -> &Database {
+    type Database = MockDatabase;
+
+    fn database(&self) -> &MockDatabase {
         &self.database
     }
 }
