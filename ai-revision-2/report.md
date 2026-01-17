@@ -1475,7 +1475,7 @@ For capabilities like this where implementations fundamentally differ, direct tr
 
 Direct implementation works well when implementations are context-specific and unlikely to be reused. If `ProductionApp`'s email sending will only ever be used by `ProductionApp` and `TestApp`'s verification recording only by `TestApp`, there's no benefit to extracting these into separate provider types. The indirection through providers would only add cognitive overhead without enabling any new capabilities.
 
-Configurable dispatch becomes valuable when implementations are reused across multiple contexts. Suppose you have three contexts—`ProductionApp`, `StagingApp`, and `DevelopmentApp`—all needing to send emails through AWS, while also having `TestApp` and `MockApp` needing verification recording. Extracting these into providers eliminates duplication:
+Configurable dispatch becomes valuable when implementations are reused across multiple contexts. Consider email sending where production and staging environments both need to send real emails through AWS, while development environments record emails for verification. The production and staging implementations are identical and benefit from sharing a single provider, while the development implementation is unique and doesn't need the provider machinery:
 
 ````rust
 #[cgp_component(EmailSender)]
@@ -1502,14 +1502,24 @@ delegate_components! {
     [
         ProductionApp,
         StagingApp,
-        DevelopmentApp,
     ] {
         EmailSenderComponent: SendEmailViaAws,
     }
 }
+
+impl CanSendEmail for DevelopmentApp {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
+        self.api_client.record_email_for_verification(recipient, message);
+        Ok(())
+    }
+}
 ````
 
-Now the AWS email implementation exists in one place and is wired to three contexts, while test contexts can wire alternative providers. The configurable dispatch machinery pays for itself through enabling this reuse.
+The `SendEmailViaAws` provider implements email sending through AWS API calls. Both `ProductionApp` and `StagingApp` wire this provider through `delegate_components!`, using the array syntax to indicate that multiple contexts share the same implementation. This eliminates duplication—the AWS integration logic exists in one place and is wired to both contexts that need it.
+
+Meanwhile, `DevelopmentApp` implements `CanSendEmail` directly on the context itself. Since the development environment's email recording behavior is specific to that context and won't be reused elsewhere, there's no benefit to extracting it into a separate provider and wiring it through the component system. The direct implementation is simpler and more straightforward.
+
+This hybrid approach demonstrates the key decision criteria for configurable dispatch: apply it when multiple contexts share implementations and benefit from the reuse. When an implementation is context-specific and unlikely to be shared, direct trait implementation provides a simpler solution that still enables context-generic code to call the trait methods uniformly across all contexts. The configurable dispatch machinery pays for itself only when it enables concrete reuse across multiple contexts.
 
 The decision criteria becomes clear: use blanket implementations when one implementation works for all contexts, use direct trait implementations when implementations are context-specific, and use configurable dispatch only when multiple implementations need to coexist and be reused across contexts.
 
@@ -2001,19 +2011,17 @@ Context-generic code depending on database functionality continues working uncha
 
 ```rust
 impl HasDatabase for ProductionApp {
-    fn database(&self) -> &dyn DatabaseOps {
+    fn database(&self) -> &AnyDatabase {
         &self.database
     }
 }
 
 impl HasDatabase for TestApp {
-    fn database(&self) -> &dyn DatabaseOps {
+    fn database(&self) -> &AnyDatabase {
         &self.database
     }
 }
 ```
-
-Because `AnyDatabase` implements `DatabaseOps`, it satisfies the trait bound required by the getter trait implementation. The blanket implementation of `CanGetUser` continues working without modification—it depends only on the abstract `HasDatabase` interface, remaining completely agnostic about whether the database is determined at compile time through generic parameters or at runtime through enum variants.
 
 Runtime selection happens at application initialization:
 
@@ -2070,20 +2078,14 @@ Leverage shared provider components to reduce the effective number of context ty
 
 ```rust
 delegate_components! {
-    new SharedDatabaseProviders {
+    ProductionApp {
         [
             GetUserComponent,
             CreateUserComponent,
             UpdateUserComponent,
             DeleteUserComponent,
         ]:
-            StandardDatabaseProviders,
-    }
-}
-
-delegate_components! {
-    ProductionApp {
-        DatabaseProviderComponent: UseDelegate<SharedDatabaseProviders>,
+            StandardDatabaseProvider,
         EmailSenderComponent: ProductionEmailSender,
         // Other components...
     }
@@ -2091,14 +2093,20 @@ delegate_components! {
 
 delegate_components! {
     TestApp {
-        DatabaseProviderComponent: UseDelegate<SharedDatabaseProviders>,
+        [
+            GetUserComponent,
+            CreateUserComponent,
+            UpdateUserComponent,
+            DeleteUserComponent,
+        ]:
+            StandardDatabaseProvider,
         EmailSenderComponent: MockEmailSender,
         // Other components...
     }
 }
 ```
 
-By extracting common provider configurations into shared component bundles, individual context definitions become lightweight wiring specifications rather than complete implementations. This reduces the maintenance burden of multiple contexts while preserving the compile-time guarantees and performance benefits of fission-driven development. Changes to database-related operations propagate automatically to all contexts using the shared providers, while contexts maintain independence for operations that genuinely differ.
+By extracting common provider configurations into bundled providers like `StandardDatabaseProvider`, individual context definitions become lightweight wiring specifications rather than complete implementations. This reduces the maintenance burden of multiple contexts while preserving the compile-time guarantees and performance benefits of fission-driven development. Changes to database-related operations propagate automatically to all contexts using the shared providers, while contexts maintain independence for operations that genuinely differ.
 
 Recognize that some context proliferation is acceptable when it reflects genuine architectural requirements. If an application genuinely needs to support distinct production, staging, development, and testing environments—each with its own authentication mechanisms, logging strategies, and service implementations—then creating four context types may be the correct solution despite apparent complexity. The goal is not minimizing the number of contexts at all costs but rather ensuring each context type represents a meaningful configuration providing value.
 
