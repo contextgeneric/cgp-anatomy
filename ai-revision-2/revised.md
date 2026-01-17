@@ -1310,7 +1310,7 @@ pub trait CanProcessRequest {
 
 Using concrete types directly eliminates the abstract type traits and their associated wiring while losing no functionality since all contexts use identical types anyway. The decision about which types to abstract should be guided by concrete evidence of variation: do different contexts actually use different types here, or are we abstracting "just in case"? If the answer is the latter, defer abstraction until actual variation emerges.
 
-A complementary strategy involves grouping related abstract types into type families that vary together. Instead of separate abstract type traits for every component, define single traits providing all related types:
+A complementary strategy involves grouping related abstract types into type collections that vary together. Instead of separate abstract type traits for every component, define single traits providing all related types:
 
 ````rust
 use cgp::prelude::*;
@@ -1323,9 +1323,9 @@ pub trait HasDatabaseTypes {
 }
 ````
 
-This reduces the number of separate traits to understand and wire while making relationships between types more explicit. When developers see a context implementing `HasDatabaseTypes`, they immediately know it provides a complete family of database-related types designed to work together, rather than needing to verify that separate connection, transaction, and query result types are compatible.
+This reduces the number of separate traits to understand and wire while making relationships between types more explicit. When developers see a context implementing `HasDatabaseTypes`, they immediately know it provides a complete collection of database-related types designed to work together, rather than needing to verify that separate connection, transaction, and query result types are compatible.
 
-The trade-off is reduced flexibility—type families make it awkward to customize only some types while using standard implementations for others. However, types that must interoperate closely are rarely customized independently, making this flexibility loss acceptable for the cognitive simplification gained.
+The trade-off is reduced flexibility—type collections make it awkward to customize only some types while using standard implementations for others. However, types that must interoperate closely are rarely customized independently, making this flexibility loss acceptable for the cognitive simplification gained.
 
 ### Progressive Disclosure Through Trait Layering
 
@@ -1431,100 +1431,243 @@ The transition from blanket trait to CGP component typically requires minimal co
 
 Even when configurable dispatch is justified by multiple implementations existing, tension remains between maximizing code reuse through fine-grained providers and minimizing cognitive overhead by keeping component counts manageable. This manifests in decisions about factoring capabilities into components: should each small functionality be its own component, or should related capabilities group together even if that reduces selective configuration opportunities?
 
-Consider database abstraction needing transaction management and query execution support. The maximally fine-grained approach defines separate components:
+Consider user management functionality needing separate operations for different user lifecycle actions. The maximally fine-grained approach defines separate components:
 
 ````rust
 use cgp::prelude::*;
 
-#[cgp_component(TransactionManager)]
-pub trait CanManageTransactions {
-    fn begin_transaction(&self) -> Result<Transaction>;
-    fn commit(&self, tx: Transaction) -> Result<()>;
+#[cgp_component(UserGetter)]
+pub trait CanGetUser {
+    fn get_user(&self, user_id: &UserId) -> Result<User>;
 }
 
-#[cgp_component(QueryExecutor)]
-pub trait CanExecuteQueries {
-    fn execute_query(&self, sql: &str) -> Result<QueryResult>;
+#[cgp_component(UserCreator)]
+pub trait CanCreateUser {
+    fn create_user(&self, email: &EmailAddress) -> Result<User>;
+}
+
+#[cgp_component(UserUpdater)]
+pub trait CanUpdateUser {
+    fn update_user(&self, user_id: &UserId, updates: UserUpdates) -> Result<()>;
+}
+
+#[cgp_component(UserDeleter)]
+pub trait CanDeleteUser {
+    fn delete_user(&self, user_id: &UserId) -> Result<()>;
 }
 ````
 
-This enables maximum flexibility—contexts could wire different providers for transactions and queries. However, each component adds cognitive overhead: additional wiring entries, additional trait bounds, additional indirection layers, additional configuration points to understand and maintain.
+This enables maximum flexibility—contexts could wire different providers for each operation. Perhaps read-only contexts only implement `CanGetUser`, while administrative contexts implement all four. However, each component adds cognitive overhead: additional wiring entries, additional trait bounds, additional indirection layers, additional configuration points to understand and maintain.
 
 The alternative groups related capabilities:
 
 ````rust
 use cgp::prelude::*;
 
-#[cgp_component(DatabaseProvider)]
-pub trait HasDatabaseCapabilities {
-    fn begin_transaction(&self) -> Result<Transaction>;
-    fn execute_query(&self, sql: &str) -> Result<QueryResult>;
+#[cgp_component(UserServicesProvider)]
+pub trait HasUserServices {
+    fn get_user(&self, user_id: &UserId) -> Result<User>;
+    fn create_user(&self, email: &EmailAddress) -> Result<User>;
+    fn update_user(&self, user_id: &UserId, updates: UserUpdates) -> Result<()>;
+    fn delete_user(&self, user_id: &UserId) -> Result<()>;
 }
 ````
 
-This coarser-grained approach reduces components and wiring entries, making configuration more manageable. However, it sacrifices flexibility—contexts cannot configure transaction management independently of query execution.
+This coarser-grained approach reduces components and wiring entries, making configuration more manageable. However, it sacrifices flexibility—contexts cannot configure create/update/delete operations independently of read operations. A read-only context must still provide implementations for modification methods, even if they return errors or panic.
 
-Optimal granularity depends on actual variation patterns in the codebase. If transactions and queries always vary together—real implementations use both real while mocks use both mock—then coarser grouping better reflects problem structure. If contexts genuinely need different combinations, fine-grained decomposition provides value by making these combinations expressible.
+Optimal granularity depends on actual variation patterns in the codebase. If read and write operations always vary together—real implementations use both while mocks use both mock versions—then coarser grouping better reflects problem structure. If contexts genuinely need different combinations—perhaps audit logging contexts need read-only access while administrative contexts need full CRUD—then fine-grained decomposition provides value by making these combinations expressible.
 
 Start with coarser-grained components and only split when concrete evidence emerges of contexts needing different configurations for grouped capabilities. This prevents premature decomposition while maintaining ability to refactor toward finer granularity as requirements evolve. The refactoring from coarse to fine is typically straightforward—split the trait, create separate providers, update wiring—making it safe to defer the split until actually needed.
+
+Consider implementing the grouped version generically:
+
+````rust
+use cgp::prelude::*;
+
+#[cgp_auto_getter]
+pub trait HasDatabase {
+    fn database(&self) -> &Database;
+}
+
+impl<Context> HasUserServices for Context
+where
+    Context: HasDatabase,
+{
+    fn get_user(&self, user_id: &UserId) -> Result<User> {
+        let row = self.database().query_row(
+            "SELECT id, email, name, created_at FROM users WHERE id = $1",
+            &[user_id],
+        )?;
+        Ok(User {
+            id: row.get(0)?,
+            email: row.get(1)?,
+            name: row.get(2)?,
+            created_at: row.get(3)?,
+        })
+    }
+
+    fn create_user(&self, email: &EmailAddress) -> Result<User> {
+        let user = User::new(email);
+        self.database().execute(
+            "INSERT INTO users (id, email, name, created_at) VALUES ($1, $2, $3, $4)",
+            &[&user.id, &user.email, &user.name, &user.created_at],
+        )?;
+        Ok(user)
+    }
+
+    fn update_user(&self, user_id: &UserId, updates: UserUpdates) -> Result<()> {
+        let mut query = String::from("UPDATE users SET ");
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![];
+        let mut param_count = 1;
+
+        if let Some(ref email) = updates.email {
+            query.push_str(&format!("email = ${}, ", param_count));
+            params.push(email);
+            param_count += 1;
+        }
+        if let Some(ref name) = updates.name {
+            query.push_str(&format!("name = ${}, ", param_count));
+            params.push(name);
+            param_count += 1;
+        }
+
+        query.truncate(query.len() - 2); // Remove trailing ", "
+        query.push_str(&format!(" WHERE id = ${}", param_count));
+        params.push(user_id);
+
+        self.database().execute(&query, &params)?;
+        Ok(())
+    }
+
+    fn delete_user(&self, user_id: &UserId) -> Result<()> {
+        self.database().execute(
+            "DELETE FROM users WHERE id = $1",
+            &[user_id],
+        )?;
+        Ok(())
+    }
+}
+````
+
+This blanket implementation provides all user services for any context with a database. The SQL queries are embedded directly in the implementation, showing the actual database operations being performed. If later evidence shows that read operations need to vary independently from write operations, the trait can be split:
+
+````rust
+pub trait HasUserQueries {
+    fn get_user(&self, user_id: &UserId) -> Result<User>;
+}
+
+pub trait HasUserCommands {
+    fn create_user(&self, email: &EmailAddress) -> Result<User>;
+    fn update_user(&self, user_id: &UserId, updates: UserUpdates) -> Result<()>;
+    fn delete_user(&self, user_id: &UserId) -> Result<()>;
+}
+
+pub trait HasUserServices: HasUserQueries + HasUserCommands {}
+````
+
+Existing code depending on `HasUserServices` continues working as that trait now bundles the focused traits. New code needing only queries depends on just `HasUserQueries`. The architecture becomes more flexible without disrupting existing usage.
 
 ### Direct Implementation as Valid Alternative
 
 Perhaps the most underutilized strategy for managing configurable dispatch complexity is simply not using it when direct trait implementation on concrete types provides adequate functionality. While CGP provides powerful code reuse tools, traditional trait implementation offers simpler and more comprehensible approaches that should not be rejected merely for feeling less sophisticated.
 
-Consider two contexts needing application services trait implementation. The CGP approach involves defining components with configurable dispatch, creating provider types, and wiring everything together. However, if implementations are simple or genuinely require different approaches awkward to express through shared code, direct implementation may be preferable:
+Consider two contexts needing user services trait implementation. The CGP approach involves defining components with configurable dispatch, creating provider types, and wiring everything together. However, if implementations are simple or genuinely require different approaches awkward to express through shared code, direct implementation may be preferable:
 
 ````rust
-pub trait ApplicationServices {
-    fn query_user(&self, user_id: &UserId) -> Result<User>;
-    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
+pub trait HasUserServices {
+    fn get_user(&self, user_id: &UserId) -> Result<User>;
+    fn create_user(&self, email: &EmailAddress) -> Result<User>;
 }
 
-impl ApplicationServices for ProductionApp {
-    fn query_user(&self, user_id: &UserId) -> Result<User> {
-        self.database.query_user(user_id)
+impl HasUserServices for ProductionApp {
+    fn get_user(&self, user_id: &UserId) -> Result<User> {
+        let row = self.database.query_row(
+            "SELECT id, email, name, created_at FROM users WHERE id = $1",
+            &[user_id],
+        )?;
+        Ok(User {
+            id: row.get(0)?,
+            email: row.get(1)?,
+            name: row.get(2)?,
+            created_at: row.get(3)?,
+        })
     }
 
-    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        self.email_sender.send(recipient, message)
+    fn create_user(&self, email: &EmailAddress) -> Result<User> {
+        let user = User::new(email);
+        self.database.execute(
+            "INSERT INTO users (id, email, name, created_at) VALUES ($1, $2, $3, $4)",
+            &[&user.id, &user.email, &user.name, &user.created_at],
+        )?;
+        Ok(user)
     }
 }
 
-impl ApplicationServices for TestApp {
-    fn query_user(&self, user_id: &UserId) -> Result<User> {
-        self.database.query_user(user_id)
+impl HasUserServices for TestApp {
+    fn get_user(&self, user_id: &UserId) -> Result<User> {
+        self.mock_users
+            .get(user_id)
+            .cloned()
+            .ok_or_else(|| Error::UserNotFound)
     }
 
-    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        self.email_sender.log(recipient, message)
+    fn create_user(&self, email: &EmailAddress) -> Result<User> {
+        let user = User::new(email);
+        self.mock_users.insert(user.id.clone(), user.clone());
+        Ok(user)
     }
 }
 ````
 
-This direct implementation eliminates all CGP-specific machinery while achieving the same functionality. The code is immediately comprehensible to any Rust developer without requiring knowledge of provider traits or component wiring. Implementation duplication represents a trade-off, but may be acceptable if logic is simple or if contexts genuinely require different approaches.
+This direct implementation eliminates all CGP-specific machinery while achieving the same functionality. The code is immediately comprehensible to any Rust developer without requiring knowledge of provider traits or component wiring. Implementation duplication represents a trade-off, but may be acceptable if logic is simple (as with the test mock) or if contexts genuinely require different approaches (database queries versus in-memory hash map lookups).
 
 When shared implementation logic becomes significant enough that duplication feels problematic, extract it into regular functions that both implementations call:
 
 ````rust
-fn query_user_impl<D: DatabaseOps>(
+fn query_user_from_db<D: DatabaseOps>(
     database: &D,
     user_id: &UserId,
 ) -> Result<User> {
-    database.query_user(user_id)
+    let row = database.query_row(
+        "SELECT id, email, name, created_at FROM users WHERE id = $1",
+        &[user_id],
+    )?;
+    Ok(User {
+        id: row.get(0)?,
+        email: row.get(1)?,
+        name: row.get(2)?,
+        created_at: row.get(3)?,
+    })
 }
 
-impl ApplicationServices for ProductionApp {
-    fn query_user(&self, user_id: &UserId) -> Result<User> {
-        query_user_impl(&self.database, user_id)
+impl HasUserServices for ProductionApp {
+    fn get_user(&self, user_id: &UserId) -> Result<User> {
+        query_user_from_db(&self.database, user_id)
     }
-    // Other methods...
+
+    fn create_user(&self, email: &EmailAddress) -> Result<User> {
+        let user = User::new(email);
+        self.database.execute(
+            "INSERT INTO users (id, email, name, created_at) VALUES ($1, $2, $3, $4)",
+            &[&user.id, &user.email, &user.name, &user.created_at],
+        )?;
+        Ok(user)
+    }
 }
 
-impl ApplicationServices for TestApp {
-    fn query_user(&self, user_id: &UserId) -> Result<User> {
-        query_user_impl(&self.database, user_id)
+impl HasUserServices for TestApp {
+    fn get_user(&self, user_id: &UserId) -> Result<User> {
+        self.mock_users
+            .get(user_id)
+            .cloned()
+            .ok_or_else(|| Error::UserNotFound)
     }
-    // Other methods...
+
+    fn create_user(&self, email: &EmailAddress) -> Result<User> {
+        let user = User::new(email);
+        self.mock_users.insert(user.id.clone(), user.clone());
+        Ok(user)
+    }
 }
 ````
 
@@ -1652,43 +1795,272 @@ While providing necessary flexibility, this pattern introduces additional config
 
 ## Additional Complexity: Functional Programming Patterns
 
-Beyond the core CGP patterns of abstract types, configurable dispatch, and getter traits, an additional layer of complexity emerges when functional programming patterns are applied within the CGP framework. Higher-order providers—providers that accept other providers as generic parameters—enable powerful composition patterns but require developers to reason about multiple abstraction layers simultaneously.
+Beyond the core CGP patterns of abstract types, configurable static dispatch, and getter traits, an additional layer of complexity emerges when functional programming patterns are applied within the CGP framework. This complexity is optional and can be avoided entirely, but understanding it helps teams make informed decisions about when functional composition provides benefits worth its cognitive overhead. Higher-order providers—providers that accept other providers as generic parameters—enable powerful composition patterns but require developers to reason about multiple abstraction layers simultaneously.
 
-Consider a higher-order provider for serializing iterators:
+### The Relationship Between Plain Functions and CGP Components
+
+At its core, CGP can be understood as a sophisticated system for managing function parameters and composition that would otherwise require explicit threading through code. When a CGP component trait contains only a single method, there exists a near one-to-one correspondence between a provider implementation and a plain function. The provider simply wraps the function in trait syntax, extracting parameters from the context rather than receiving them as explicit function arguments.
+
+Consider how a simple area calculation looks as both a plain function and a CGP component:
 
 ```rust
+// Plain function - requires explicit parameters
+pub fn rectangle_area(width: f64, height: f64) -> f64 {
+    width * height
+}
+
+// CGP component equivalent
 use cgp::prelude::*;
 
-pub struct SerializeIteratorWith<Provider = UseContext>(pub PhantomData<Provider>);
+#[cgp_component(AreaCalculator)]
+pub trait HasArea {
+    fn area(&self) -> f64;
+}
 
-#[cgp_impl(SerializeIteratorWith<Provider>)]
-impl<Context, Value, Provider> ValueSerializer<Value> for Context
+#[cgp_auto_getter]
+pub trait HasRectangleFields {
+    fn width(&self) -> f64;
+    fn height(&self) -> f64;
+}
+
+#[cgp_impl(new RectangleArea)]
+impl<Context> AreaCalculator for Context
 where
-    for<'a> &'a Value: IntoIterator,
-    Provider: for<'a> ValueSerializer<Context, <&'a Value as IntoIterator>::Item>,
+    Context: HasRectangleFields,
 {
-    fn serialize<S>(&self, value: &Value, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        // Implementation that uses Provider to serialize items
+    fn area(&self) -> f64 {
+        rectangle_area(self.width(), self.height())
     }
 }
 ```
 
-The behavior of inner item serialization is determined by the `Provider` generic parameter rather than the context. This static binding allows provider implementers to choose specific providers instead of leaving it configurable by concrete contexts. The `UseContext` default provider enables routing through context as usual when no explicit override is needed.
+The provider implementation essentially adapts the plain function to work with contexts providing width and height through the `HasRectangleFields` interface. The core logic remains in the plain function, while the provider handles extracting parameters from the context. This separation allows business logic to remain pure and easily testable while the context-dependent adaptation layer handles dependency resolution.
 
-This pattern introduces complexity beyond basic CGP components because developers must understand:
-- How higher-order providers differ from regular providers
-- When to use explicit provider parameters versus context routing
-- How default providers interact with explicit specifications
-- The trade-offs between static binding and dynamic configuration
+This correspondence reveals why many functional programming concepts translate naturally into CGP patterns. Higher-order functions become higher-order providers, function composition becomes provider composition, and dependency injection through function parameters becomes dependency injection through trait bounds. CGP essentially provides object-oriented syntax for expressing functional programming patterns, making these techniques more palatable to developers who find functional programming syntax unfamiliar or uncomfortable.
 
-The tension between functional and object-oriented trait design further complicates matters. Functional programmers prefer fine-grained single-method traits enabling precise composition, while object-oriented developers expect comprehensive interfaces grouping related functionality. CGP can accommodate both approaches, but this flexibility means teams must make deliberate choices about trait granularity rather than following a single prescribed pattern.
+However, attempting to use plain functions for everything encounters severe practical limitations. As dependency counts grow, parameter lists become unwieldy and must be threaded through every layer of the call stack. Consider implementing user creation that depends on database, email sender, and logger:
 
-For developers comfortable with functional programming concepts, higher-order providers feel natural and provide elegant solutions to composition challenges. For those from object-oriented backgrounds, the additional abstraction layers can feel like unnecessary complexity obscuring straightforward implementations. This divergence in perception makes it difficult to establish universal guidelines—what feels appropriately abstract to one developer feels over-engineered to another.
+```rust
+pub fn create_user<D, E, L>(
+    database: &D,
+    email_sender: &E,
+    logger: &L,
+    email: &EmailAddress,
+) -> Result<User>
+where
+    D: DatabaseOps,
+    E: EmailSender,
+    L: Logger,
+{
+    logger.info("Creating new user");
+    let user = User::new(email);
 
-The pragmatic response is recognizing that functional patterns represent an optional advanced layer of CGP that need not be adopted universally. Teams can benefit from CGP's core multi-context support through blanket traits and simple components without embracing higher-order providers. When composition challenges arise that higher-order providers elegantly solve, they can be introduced selectively. The key is avoiding the trap of adopting functional patterns everywhere just because they are available, applying them only where they provide concrete benefits over simpler alternatives.
+    database.execute(
+        "INSERT INTO users (id, email, name, created_at) VALUES ($1, $2, $3, $4)",
+        &[&user.id, &user.email, &user.name, &user.created_at],
+    )?;
+
+    email_sender.send_welcome_email(&user)?;
+    logger.info(&format!("Created user {}", user.id));
+
+    Ok(user)
+}
+```
+
+Any function calling `create_user` must accept and forward all these parameters, even if it doesn't directly use them. If we add audit logging requiring another parameter, every function in the call chain needs updating. This parameter threading creates brittleness and maintenance burden that trait-based dependency injection avoids:
+
+```rust
+use cgp::prelude::*;
+
+pub trait CanCreateUser {
+    fn create_user(&self, email: &EmailAddress) -> Result<User>;
+}
+
+impl<Context> CanCreateUser for Context
+where
+    Context: HasDatabase + CanSendEmail + HasLogger,
+{
+    fn create_user(&self, email: &EmailAddress) -> Result<User> {
+        self.logger().info("Creating new user");
+        let user = User::new(email);
+
+        self.database().execute(
+            "INSERT INTO users (id, email, name, created_at) VALUES ($1, $2, $3, $4)",
+            &[&user.id, &user.email, &user.name, &user.created_at],
+        )?;
+
+        self.send_welcome_email(&user)?;
+        self.logger().info(&format!("Created user {}", user.id));
+
+        Ok(user)
+    }
+}
+```
+
+Adding a new dependency like audit logging only requires adding `HasAuditLogger` to the trait bound and calling `self.audit_log()` where needed. Functions calling `create_user` don't require any changes—they already have access to the context providing all dependencies.
+
+### Higher-Order Functions and Composition Challenges in Rust
+
+The limitations of plain functions become even more apparent when attempting functional composition patterns. Higher-order functions—functions that accept or return other functions—enable elegant composition in languages like Haskell, but Rust's syntax makes these patterns awkward and verbose.
+
+Consider implementing a scaling transformation for area calculations. In a functional style, we might write a higher-order function:
+
+```rust
+pub fn scaled_area<Context>(
+    scale_factor: f64,
+    inner_calculator: impl Fn(&Context) -> f64,
+) -> impl Fn(&Context) -> f64 {
+    move |context| inner_calculator(context) * scale_factor
+}
+```
+
+This function accepts an area calculator and returns a new calculator that scales the result. However, using it requires verbose closure construction that cannot be easily named at the module level:
+
+```rust
+// We want to write something like this:
+pub fn scaled_rectangle_area<Context>(context: &Context) -> f64
+where
+    Context: HasRectangleFields + HasScaleFactor,
+{
+    scaled_area(context.scale_factor(), rectangle_area)(context)
+}
+```
+
+But even this simplified version shows the awkwardness—the `scaled_area` function must be called every time we want to use the scaled calculator, reconstructing the closure repeatedly. We cannot define a top-level function like `scaled_rectangle_area = scaled_area(rectangle_area)` as we might in Haskell, because Rust requires explicit generic parameter declarations and trait bounds.
+
+Furthermore, if the higher-order function needs to express constraints on the context, these constraints must be propagated explicitly. The more generic parameters and constraints involved, the more unwieldy the syntax becomes. Compare this with Haskell where function composition and partial application provide concise syntax for building complex computations from simpler ones.
+
+### Higher-Order Providers: CGP's Solution to Composition
+
+CGP's higher-order providers provide a more ergonomic approach to composition that works naturally with Rust's type system. Instead of accepting functions as parameters, providers accept other providers as generic type parameters:
+
+```rust
+use cgp::prelude::*;
+
+pub struct ScaledArea<InnerCalculator>(pub PhantomData<InnerCalculator>);
+
+#[cgp_auto_getter]
+pub trait HasScaleFactor {
+    fn scale_factor(&self) -> f64;
+}
+
+#[cgp_impl(ScaledArea<InnerCalculator>)]
+impl<Context, InnerCalculator> AreaCalculator for Context
+where
+    Context: HasScaleFactor,
+    InnerCalculator: AreaCalculator<Context>,
+{
+    fn area(&self) -> f64 {
+        InnerCalculator::area(self) * self.scale_factor()
+    }
+}
+```
+
+This provider accepts another provider as a generic parameter and delegates to it, scaling the result. The composition is expressed through type-level programming rather than value-level closures. Crucially, we can now define a composed provider as a simple type alias:
+
+```rust
+type ScaledRectangleArea = ScaledArea<RectangleArea>;
+```
+
+This alias creates a new provider that composes scaling with rectangle area calculation, with no runtime overhead and no awkward closure syntax. The type system tracks all the constraints—`ScaledRectangleArea` can only be used with contexts that provide both rectangle fields and a scale factor—and the compiler generates specialized code at monomorphization time.
+
+Compare the conciseness with the Haskell-style composition we aspired to earlier. CGP's approach achieves similar elegance but works within Rust's type system constraints rather than fighting against them. The syntax is more verbose than Haskell's but dramatically simpler than attempting equivalent composition with higher-order functions and closures.
+
+### The Tension Between Functional and Object-Oriented Trait Design
+
+The functional programming patterns that CGP enables create tension with object-oriented design preferences that many Rust developers bring from other languages. This tension manifests most clearly in debates about trait granularity and comprehensiveness.
+
+Object-oriented developers tend to design comprehensive interfaces grouping all related functionality together:
+
+```rust
+#[cgp_component(ShapeProvider)]
+pub trait HasShape {
+    type Scalar: Copy + Add + Mul;
+    type Angle: Copy + Add + Mul;
+
+    fn area(&self) -> Self::Scalar;
+    fn perimeter(&self) -> Self::Scalar;
+    fn scale(&mut self, factor: Self::Scalar);
+    fn rotate(&mut self, angle: Self::Angle);
+}
+```
+
+This monolithic trait provides a complete "shape interface" with all operations a shape might support. From an OOP perspective, this makes sense—a shape is a conceptual entity with various capabilities, and the trait represents that complete abstraction.
+
+However, this design creates severe problems for higher-order providers and functional composition. Consider trying to write a provider that scales any shape:
+
+```rust
+#[cgp_impl(new ScaledShape<InnerProvider>)]
+impl<Context, InnerProvider> ShapeProvider for Context
+where
+    InnerProvider: ShapeProvider<Context>,
+{
+    type Scalar = InnerProvider::Scalar;
+    type Angle = InnerProvider::Angle;
+
+    fn area(&self) -> Self::Scalar {
+        InnerProvider::area(self) * self.scale_factor()
+    }
+
+    // Must forward all other methods as pass-through
+    fn perimeter(&self) -> Self::Scalar {
+        InnerProvider::perimeter(self)
+    }
+
+    fn scale(&mut self, factor: Self::Scalar) {
+        InnerProvider::scale(self, factor)
+    }
+
+    fn rotate(&mut self, angle: Self::Angle) {
+        InnerProvider::rotate(self, angle)
+    }
+}
+```
+
+The provider must implement every method in the trait, even though it only wants to customize one of them. The other methods become tedious boilerplate forwarding to the inner provider. As the trait grows, this forwarding burden increases. Worse, if someone adds a new method to the trait, every higher-order provider must be updated to forward it, even if the new method is completely unrelated to their concerns.
+
+The functional approach splits capabilities into focused traits:
+
+```rust
+#[cgp_type]
+pub trait HasScalarType {
+    type Scalar: Copy + Add + Mul;
+}
+
+#[cgp_component(AreaCalculator)]
+pub trait HasArea: HasScalarType {
+    fn area(&self) -> Self::Scalar;
+}
+
+#[cgp_component(PerimeterCalculator)]
+pub trait HasPerimeter: HasScalarType {
+    fn perimeter(&self) -> Self::Scalar;
+}
+
+#[cgp_component(Scaler)]
+pub trait CanScale: HasScalarType {
+    fn scale(&mut self, factor: Self::Scalar);
+}
+```
+
+Now higher-order providers can be precisely targeted:
+
+```rust
+#[cgp_impl(new ScaledArea<InnerCalculator>)]
+impl<Context, InnerCalculator> AreaCalculator for Context
+where
+    Context: HasScaleFactor,
+    InnerCalculator: AreaCalculator<Context>,
+{
+    fn area(&self) -> Self::Scalar {
+        InnerCalculator::area(self) * self.scale_factor()
+    }
+}
+```
+
+This provider only needs to implement the one method it cares about. It doesn't need to know about perimeter, scaling operations, or any future methods that might be added. The composition is clean and focused.
+
+However, developers from OOP backgrounds often perceive this decomposition as fragmentation that makes the API harder to discover and use. They ask "where's the complete shape interface?" and feel uncomfortable with capabilities scattered across many small traits. The learning curve for teams making this transition can be significant, as it requires unlearning deeply ingrained assumptions about how abstractions should be structured.
 
 ## Conclusion: Selective Application Philosophy
 
