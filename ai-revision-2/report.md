@@ -1217,264 +1217,56 @@ The three adoption barriers examined in this chapter—the chicken-and-egg probl
 
 # Chapter 9: Managing CGP Complexity
 
-Context-Generic Programming introduces several layers of abstraction that developers must understand and manage. However, not all sources of complexity are equal. This chapter establishes a crucial distinction: the primary complexity of CGP—managing multiple contexts simultaneously—represents an unavoidable requirement that must be accepted if CGP is to provide value. The secondary complexities—abstract types, configurable static dispatch, and getter traits—can be selectively minimized through careful design choices and pragmatic trade-offs. Understanding this hierarchy helps teams navigate CGP adoption by focusing effort on accepting what cannot be changed while actively managing what can be controlled.
+Context-Generic Programming introduces several layers of abstraction that developers must navigate. This chapter establishes a crucial framework for understanding these layers: CGP's complexity exists in a hierarchy where some elements are fundamental requirements while others represent optional conveniences. Understanding this distinction enables teams to adopt CGP strategically, accepting what cannot be changed while actively managing what can be controlled.
 
-## The Complexity Hierarchy
+## The Complexity Hierarchy: A Framework for Navigation
 
-The confusion surrounding CGP's complexity often stems from conflating fundamentally different kinds of challenges. When developers first encounter context-generic code, they perceive a wall of unfamiliar constructs: generic type parameters, trait bounds, blanket implementations, abstract types, component wiring, and getter traits. This perception lumps together patterns that serve different purposes and have different characteristics. Some of these patterns represent necessary consequences of supporting multiple contexts, while others are optional conveniences that trade explicitness for automation.
+When developers first encounter context-generic code, they perceive an overwhelming array of unfamiliar constructs simultaneously: generic type parameters, trait bounds, blanket implementations, abstract types, component wiring, getter traits, and more. This perception lumps together patterns serving fundamentally different purposes. Some patterns represent necessary consequences of supporting multiple contexts—the primary complexity that justifies CGP's existence. Others represent optional conveniences trading explicitness for automation—secondary complexities that can be selectively minimized through careful design.
 
-The primary complexity of CGP derives from a single requirement: code must work with multiple distinct context types rather than a single monolithic type. This requirement cannot be eliminated without abandoning the core purpose of CGP. If a system genuinely needs production contexts, testing contexts, and development contexts—each with different implementations of certain capabilities—then some mechanism must exist for writing code that operates across all three contexts. CGP provides that mechanism through compile-time generics and trait-based abstraction, but the fundamental challenge of managing multiple contexts exists regardless of the technical approach chosen.
-
-Secondary complexities, by contrast, represent specific technical patterns that CGP employs to make multi-context code more ergonomic and maintainable. Abstract types eliminate generic parameter proliferation. Configurable static dispatch enables extensible component selection. Getter traits provide structural typing. Each pattern adds cognitive overhead but solves concrete problems that arise when writing context-generic code. Crucially, these patterns are not all-or-nothing propositions—teams can adopt some CGP patterns while avoiding others, or apply patterns selectively to different parts of the codebase.
-
-This distinction between primary and secondary complexity has profound implications for adoption strategy. Teams cannot successfully adopt CGP by trying to minimize all complexity simultaneously. The primary complexity must be accepted as the price of supporting multiple contexts, with effort focused on understanding why that price is necessary and worthwhile. Only after accepting the fission-driven mindset—viewing multiple contexts as beneficial rather than problematic—does it make sense to address secondary complexities through selective application of CGP's advanced features.
-
-## Primary Complexity: The Multi-Context Requirement
-
-The irreducible core of CGP's complexity stems from the necessity of managing multiple context types that share code but differ in implementation details. When developers trained in fusion-driven patterns first encounter this multi-context requirement, their instinctive reaction is that it represents unnecessary complexity that could be eliminated through better design. This reaction misses a fundamental point: the complexity of managing multiple contexts is inherent to the problem being solved, not an artifact of the solution being employed.
-
-Consider a simple scenario where an application needs both production and testing configurations. The production version connects to real databases, sends actual HTTP requests to external APIs, and delivers emails through SMTP servers. The testing version uses in-memory mock databases, returns predetermined responses for API calls, and logs emails rather than sending them. These two configurations share almost all their business logic—user authentication, data validation, error handling, transaction management—but differ critically in how they interact with external systems.
-
-Without context-generic programming, supporting these two configurations requires choosing between approaches that all have severe limitations. Complete code duplication creates two separate implementations of all shared logic, ensuring that every bug fix and feature addition must be manually propagated to both implementations. This duplication creates immediate maintenance burden and guarantees eventual divergence as changes to one implementation fail to reach the other. Yet this approach is common precisely because it requires no abstractions—the production code directly uses production types, the test code directly uses test types, and neither needs to accommodate the other's existence.
-
-Runtime dispatch through enums or trait objects avoids duplication by allowing a single context type to hold either production or test implementations behind a common interface. However, this approach trades compile-time type safety for runtime flexibility, introduces performance overhead through virtual dispatch, restricts which traits can be used to only those that satisfy object safety requirements, and cannot prevent invalid configurations where production and test implementations are accidentally mixed within the same context. The type system becomes unable to distinguish between the two configurations, making entire categories of bugs undetectable at compile time.
-
-Feature flags and conditional compilation create the illusion of a single codebase while actually maintaining multiple parallel implementations that are selected through `#[cfg]` attributes. This approach preserves compile-time optimization but creates exponential complexity as feature combinations multiply, makes it impossible to use different configurations in different parts of the same binary, and leads to testing nightmares where certain feature combinations remain broken because they are rarely exercised together. The apparent simplicity of working with a single context type masks the underlying reality of managing multiple configurations through scattered conditional compilation directives.
-
-Context-Generic Programming accepts the reality that multiple context types exist and provides tools for writing code that works correctly with all of them. The business logic becomes generic over a context type parameter with trait bounds expressing the capabilities that context must provide. Each concrete context explicitly implements those required capabilities, and the compiler verifies that all constraints are satisfied before generating specialized code for each context type. This approach achieves compile-time type safety, zero-cost abstraction through monomorphization, and extensibility where new contexts can be added without modifying existing code.
-
-The cost of this approach manifests as the need to think abstractly rather than concretely. Instead of writing methods directly on a `ProductionApp` or `TestApp` struct, developers write generic functions parameterized over any context satisfying certain trait bounds. Instead of accessing fields directly, code uses getter traits to abstract over structural differences between contexts. Instead of referencing concrete types, code uses associated types that vary per-context. Each abstraction layer adds cognitive overhead by introducing indirection between the code being written and the concrete types it will eventually work with.
-
-This cognitive overhead represents the primary complexity of CGP, and it is unavoidable. The abstractions are not incidental implementation details that could be designed away—they are the mechanism through which code achieves context polymorphism. Attempts to reduce this complexity by avoiding abstractions lead back to the fusion-driven approaches with their own severe limitations. The choice is not between CGP's abstractions and no abstractions, but between compile-time abstractions through generics versus runtime abstractions through enums and dynamic dispatch, or the hidden abstractions of conditional compilation.
-
-Understanding this point is critical because it reframes how teams should evaluate CGP's complexity. The relevant question is not "why does CGP require thinking about generic types and trait bounds?" but rather "given that our system needs multiple contexts, which approach to managing that complexity provides the best trade-offs for our specific requirements?" When framed this way, CGP's abstractions become not an obstacle to be overcome but a tool to be understood and wielded effectively.
-
-The psychological challenge of accepting multi-context management as necessary complexity rather than avoidable overhead cannot be understated. Developers who have internalized fusion-driven patterns find the very existence of multiple context types uncomfortable, viewing it as a design smell indicating that the architecture has gone wrong somewhere. The suggestion that multiple contexts are not just acceptable but beneficial triggers resistance rooted in years of experience where maintaining a single monolithic context was the correct and successful strategy.
-
-This resistance has legitimate foundations. In codebases where variation is genuinely limited, fusion-driven patterns work well and provide cognitive simplicity that generic abstractions cannot match. A production application with minimal configuration variation does not benefit from being rewritten to support multiple contexts that will never materialize. The YAGNI principle—You Aren't Gonna Need It—warns against speculative abstraction, and many developers have experienced projects damaged by premature generalization attempting to support flexibility that never got used.
-
-However, the legitimate success of fusion patterns in contexts with limited variation does not invalidate fission-driven approaches in contexts with extensive variation. The key insight is recognizing when a codebase has crossed the threshold where fusion patterns strain under the weight of variation they must accommodate. Enums with dozens of variants, feature flag matrices that have grown unmanageable, duplicated code across multiple contexts that share most logic—these are signals that the codebase would benefit from fission-driven patterns despite their upfront complexity.
-
-Accepting CGP's primary complexity means accepting that in systems with genuine multi-context requirements, the abstractions enabling context polymorphism provide value despite their cognitive overhead. This acceptance is psychological rather than technical—it requires shifting from viewing multiple contexts as a problem to be minimized toward viewing them as a natural consequence of supporting variation. Once this mindset shift occurs, the technical patterns of CGP become tools for managing a necessary complexity rather than obstacles creating unnecessary complexity.
-
-## Secondary Complexity: Abstract Types
-
-Having established that multiple contexts represent unavoidable complexity, we turn to abstract types as the first secondary complexity that can be selectively minimized through careful design. Abstract types introduce type-level indirection that transforms concrete type references into associated type lookups, requiring readers to follow chains of delegation to understand what concrete types will actually be used. This indirection creates cognitive overhead that accumulates as the number of abstract types grows and as relationships between them become more complex.
-
-The problem abstract types solve becomes clear when we examine what happens without them. Suppose we want to generalize user management code to work with different user and ID representations across contexts. Without abstract types, this requires introducing type parameters that must appear everywhere the trait is used:
-
-```rust
-pub trait CanQueryUser<UserId, User> {
-    fn get_user(&self, user_id: &UserId) -> Result<User>;
-    fn create_user(&self, email: &EmailAddress) -> Result<User>;
-}
-
-pub trait CanProcessUser<UserId, User> {
-    fn process_user(&self, user_id: &UserId) -> Result<()>;
-}
-
-impl<Context, UserId, User> CanProcessUser<UserId, User> for Context
-where
-    Context: CanQueryUser<UserId, User>,
-{
-    fn process_user(&self, user_id: &UserId) -> Result<()> {
-        let user = self.get_user(user_id)?;
-        // ... process user
-        Ok(())
-    }
-}
-```
-
-Every trait bound must specify both `UserId` and `User` parameters explicitly, creating visual noise and cognitive overhead. More problematically, every trait that builds upon `CanQueryUser` must also be parameterized by these types, even if that trait's specific functionality has nothing to do with user representation details. This viral propagation of type parameters creates maintenance burden—adding, removing, or reordering parameters requires updating every trait and implementation throughout the codebase.
-
-When examining a trait that depends on abstract types, readers cannot immediately determine what concrete types will be used without tracing through the context's type-level configuration. Consider a trait depending on multiple abstract types:
-
-```rust
-pub trait CanProcessRequest:
-    HasUserIdType +
-    HasUserType +
-    HasErrorType
-{
-    fn process_request(
-        &self,
-        user_id: &Self::UserId,
-    ) -> Result<Self::User, Self::Error>;
-}
-```
-
-Understanding what `process_request` actually does requires looking up three separate type trait definitions to discover what `UserId`, `User`, and `Error` represent for any given context. This information gathering becomes burdensome as abstract types proliferate, creating cognitive fragmentation where understanding any single piece of code requires assembling information from multiple dispersed locations.
-
-The cognitive burden intensifies when abstract types have trait bounds referencing other abstract types, creating dependency chains that must be mentally resolved. A type system that tracks these relationships provides safety guarantees, but developers must maintain mental models of complex type-level graphs. For those accustomed to explicit generic parameters where all type relationships are visible in function signatures, this implicit web of constraints can feel disorienting and difficult to navigate.
-
-### Minimizing Abstract Type Proliferation
-
-The most effective strategy for reducing abstract types' cognitive overhead is using fewer of them. Not every type that could potentially vary between contexts needs abstraction—many types can remain concrete without significantly limiting flexibility or reusability. The key is identifying which types genuinely benefit from abstraction versus which are abstracted speculatively.
-
-Consider an application with user management capabilities. The initial temptation might be abstracting over every type involved in user operations: user IDs, user types, error types, database connection types, and authentication token types. However, if the application consistently uses the same ID format and user representation across all contexts, much of this abstraction provides no actual benefit:
-
-```rust
-pub trait CanQueryUser {
-    fn get_user(&self, user_id: &UserId) -> Result<User, Self::Error>;
-    fn create_user(&self, email: &EmailAddress) -> Result<User, Self::Error>;
-}
-```
-
-Using concrete types for `UserId` and `User` eliminates two abstract type traits and their associated wiring while losing no functionality since all contexts use identical types anyway. The decision about which types to abstract should be guided by concrete evidence of variation: do different contexts actually use different types here, or are we abstracting "just in case"? If the answer is the latter, defer abstraction until actual variation emerges.
-
-For example, if both `ProductionApp` and `TestApp` use the same `UserId` and `User` types from your domain model, there's no benefit to making them abstract:
-
-```rust
-// Concrete types work fine when all contexts use the same representation
-pub struct ProductionApp {
-    pub database: Database,
-}
-
-pub struct TestApp {
-    pub mock_users: HashMap<UserId, User>,
-}
-
-impl CanQueryUser for ProductionApp {
-    fn get_user(&self, user_id: &UserId) -> Result<User, Self::Error> {
-        // Query real database
-    }
-}
-
-impl CanQueryUser for TestApp {
-    fn get_user(&self, user_id: &UserId) -> Result<User, Self::Error> {
-        // Return from mock storage
-    }
-}
-```
-
-Both contexts can implement the same trait using the same concrete types, even though their implementation strategies differ. The contexts vary in how they retrieve users, not in what types represent users.
-
-Abstract types become valuable when contexts genuinely need different type representations. For instance, if some contexts work with full `User` objects while others work with lightweight `UserSummary` objects for performance reasons, then abstracting the user type enables both patterns to coexist:
-
-```rust
-#[cgp_type]
-pub trait HasUserType {
-    type User;
-}
-
-pub trait CanQueryUser: HasUserType {
-    fn get_user(&self, user_id: &UserId) -> Result<Self::User, Self::Error>;
-}
-```
-
-A complementary strategy involves grouping related abstract types into type collections that vary together. Instead of separate abstract type traits for every component, define single traits providing all related types:
-
-```rust
-#[cgp_type]
-pub trait HasUserTypes {
-    type UserId: Clone + PartialEq;
-    type User;
-}
-```
-
-This reduces the number of separate traits to understand and wire while making relationships between types more explicit. When developers see a context implementing `HasUserTypes`, they immediately know it provides a complete collection of user-related types designed to work together, rather than needing to verify that separate user and ID types are compatible.
-
-The trade-off is reduced flexibility—type collections make it awkward to customize only some types while using standard implementations for others. However, types that must interoperate closely are rarely customized independently. A `UserId` type is inherently designed to identify instances of its corresponding `User` type, making these types natural candidates for grouping. This pairing makes the flexibility loss acceptable for the cognitive simplification gained.
-
-### Trade-offs Between Type Safety and Simplicity
-
-Abstract types represent a trade-off between type-level safety and conceptual simplicity. They provide strong guarantees that related types are consistent across contexts, achieving this safety through indirection and cognitive overhead. Sometimes accepting weaker guarantees in exchange for simpler code is the right choice.
-
-Consider user ID handling in a large application. The most type-safe approach uses abstract ID types throughout:
-
-```rust
-#[cgp_type]
-pub trait HasUserIdType {
-    type UserId: Clone + PartialEq + Debug;
-}
-
-pub trait CanQueryUser: HasUserIdType {
-    fn get_user(&self, user_id: &Self::UserId) -> Result<User>;
-}
-```
-
-This ensures ID types are consistent and compiler-verified across all user operations. However, it requires `UserId` appearing in almost every user-related trait bound, creating visual noise and requiring every context to wire a user ID type even when ID handling is straightforward.
-
-An alternative accepts some type safety loss for simplicity by using concrete ID types:
-
-```rust
-use uuid::Uuid;
-
-pub trait CanQueryUser {
-    fn get_user(&self, user_id: &Uuid) -> Result<User>;
-}
-```
-
-Using `Uuid` directly eliminates the abstract user ID type entirely, simplifying trait definitions and removing ID type wiring needs. The trade-off is that contexts cannot use different ID representations—everything must use UUIDs. For applications where this standardization is acceptable (and often desirable for consistency), this precision loss is a reasonable price for significant complexity reduction.
-
-Consider also error handling in user operations. The most type-safe approach uses abstract error types:
-
-```rust
-#[cgp_type]
-pub trait HasErrorType {
-    type Error: Debug;
-}
-
-pub trait CanQueryUser: HasUserIdType + HasErrorType {
-    fn get_user(&self, user_id: &Self::UserId) -> Result<User, Self::Error>;
-}
-```
-
-This ensures error types are consistent and compiler-verified. However, it requires `Error` appearing in almost every trait bound, creating visual noise and requiring every context to wire an error type even when error handling is straightforward.
-
-An alternative accepts some type safety loss for simplicity by using concrete error types:
-
-```rust
-use anyhow::Result;
-
-pub trait CanQueryUser {
-    fn get_user(&self, user_id: &UserId) -> Result<User>;
-}
-```
-
-Using `anyhow::Result` eliminates the abstract error type entirely, simplifying trait definitions and removing error type wiring needs. The trade-off is that contexts cannot use different error types, and error handling becomes less precise. For applications where errors mostly propagate upward rather than requiring specific matching, this precision loss is acceptable for significant complexity reduction.
-
-The key insight is that abstract versus concrete type choice is not all-or-nothing. Different types in the same system can make different choices based on actual variation needs. User and ID types where contexts genuinely differ in their representations justify abstraction overhead. Supporting types like timestamps, email addresses, or error types where all contexts use the same implementation may not warrant abstraction despite being technically "configurable."
-
-The decision-making process should be pragmatic: start with concrete types, and only introduce abstraction when concrete evidence emerges that different contexts need different type representations. A production context using `User` structs and a test context using `MockUser` structs represents concrete evidence justifying user type abstraction. But if both contexts use the same `User` type from your domain model, the abstraction provides no benefit and only adds complexity.
-
-## Secondary Complexity: Configurable Static Dispatch
-
-Configurable static dispatch through type-level lookup tables represents CGP's most distinctive technical contribution, enabling multiple overlapping implementations to coexist and be selected per-context. However, this mechanism also represents CGP's most intimidating feature for newcomers, introducing concepts and syntax without direct parallels in standard Rust. The cognitive challenge stems from type-level tables transforming types into computational participants rather than passive classifications—a level of abstraction that many developers find disorienting when first encountered.
-
-A crucial insight often missed during initial CGP adoption: **configurable dispatch is frequently unnecessary**. Many traits that appear in CGP codebases don't actually need the full machinery of provider traits and component wiring. Understanding when configurable dispatch provides genuine value versus when simpler patterns suffice represents a key skill for managing CGP's complexity effectively.
-
-### Recognizing When Configurable Dispatch Is Unnecessary
-
-Consider a typical scenario where an application needs both production and testing contexts:
+Consider our running example of applications supporting both production and testing environments:
 
 ````rust
+#[derive(HasField)]
 pub struct ProductionApp {
     pub database: Database,
-    pub api_client: AwsApiClient,
+    pub api_client: ProductionApiClient,
 }
 
+#[derive(HasField)]
 pub struct TestApp {
     pub database: Database,
     pub api_client: MockApiClient,
 }
 ````
 
-Suppose we need to implement user querying and email sending functionality. The initial instinct when learning CGP might be to make everything configurable through provider traits:
+These contexts share a database type but differ in their API client implementations. Now examine three different ways to implement user querying functionality, each representing a different point on the complexity spectrum:
 
+**Approach 1: Complete Duplication**
 ````rust
-#[cgp_component(UserQuerier)]
-pub trait CanGetUser {
-    fn get_user(&self, user_id: &UserId) -> Result<User>;
+impl ProductionApp {
+    pub fn get_user(&self, user_id: &UserId) -> Result<User> {
+        let row = self.database.query_row(
+            "SELECT id, email, name FROM users WHERE id = $1",
+            &[user_id],
+        )?;
+        Ok(User::from_row(row))
+    }
 }
 
-#[cgp_component(EmailSender)]
-pub trait CanSendEmail {
-    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
+impl TestApp {
+    pub fn get_user(&self, user_id: &UserId) -> Result<User> {
+        let row = self.database.query_row(
+            "SELECT id, email, name FROM users WHERE id = $1",
+            &[user_id],
+        )?;
+        Ok(User::from_row(row))
+    }
 }
 ````
 
-However, examining the actual requirements reveals an important distinction. User querying uses the `Database` type, which is identical across both contexts—both `ProductionApp` and `TestApp` contain the same `Database` type. The implementation logic doesn't vary between contexts; only the context structure differs. For this case, a simple blanket trait implementation suffices:
+This approach requires no abstraction whatsoever. The identical query logic appears in both implementations, creating immediate maintenance burden—bug fixes and enhancements must be manually propagated to both locations.
 
+**Approach 2: Blanket Implementation**
 ````rust
 #[cgp_auto_getter]
 pub trait HasDatabase {
@@ -1490,36 +1282,200 @@ where
     Context: HasDatabase,
 {
     fn get_user(&self, user_id: &UserId) -> Result<User> {
-        // SQL query using self.database()
+        let row = self.database().query_row(
+            "SELECT id, email, name FROM users WHERE id = $1",
+            &[user_id],
+        )?;
+        Ok(User::from_row(row))
     }
 }
 ````
 
-This blanket implementation automatically works with any context providing a `Database` through the `HasDatabase` getter trait. No configurable dispatch is needed because the implementation logic is genuinely generic—it works identically for all contexts that satisfy the simple requirement of providing database access.
+This approach eliminates duplication by writing the query logic once as a generic implementation. Both contexts automatically gain the capability by implementing the simple `HasDatabase` getter trait. The trade-off is introducing abstraction—code must now work with generic types and trait bounds rather than concrete types and direct field access.
 
-Email sending, by contrast, requires genuinely different implementations for different contexts. The production context sends real emails through AWS, while the test context records emails for later verification. This difference isn't about accessing different fields from the context structure—it's about fundamentally different behavior that cannot be expressed through a single generic implementation.
+**Approach 3: Configurable Dispatch**
+````rust
+#[cgp_component(UserQuerier)]
+pub trait CanGetUser {
+    fn get_user(&self, user_id: &UserId) -> Result<User>;
+}
 
-### Direct Implementation: The Simpler Alternative
+#[cgp_impl(new QueryUserFromDatabase)]
+impl<Context> UserQuerier for Context
+where
+    Context: HasDatabase,
+{
+    fn get_user(&self, user_id: &UserId) -> Result<User> {
+        let row = self.database().query_row(
+            "SELECT id, email, name FROM users WHERE id = $1",
+            &[user_id],
+        )?;
+        Ok(User::from_row(row))
+    }
+}
 
-When functionality requires context-specific implementations that aren't reused across multiple contexts, direct trait implementation often provides a simpler solution than configurable dispatch. The `CanSendEmail` trait can be implemented directly on each concrete context:
+delegate_components! {
+    ProductionApp {
+        UserQuerierComponent: QueryUserFromDatabase,
+    }
+}
+
+delegate_components! {
+    TestApp {
+        UserQuerierComponent: QueryUserFromDatabase,
+    }
+}
+````
+
+This approach adds the full CGP machinery of provider traits and component wiring. For this specific example where only one implementation exists, this additional complexity provides no benefit—it only adds boilerplate without enabling any new capabilities.
+
+The comparison reveals the hierarchy. Moving from duplication to blanket implementation introduces **primary complexity**—generic types and trait bounds that enable code reuse across contexts. This complexity is unavoidable if we want to write the query logic once and have it work for both `ProductionApp` and `TestApp`. Moving from blanket implementation to configurable dispatch introduces **secondary complexity**—provider traits and component wiring that enable selecting between multiple implementations. This complexity becomes valuable only when multiple implementations need to coexist.
+
+The distinction matters profoundly for adoption strategy. Teams cannot successfully adopt CGP by trying to minimize all complexity simultaneously. The primary complexity must be accepted as the price of supporting multiple contexts, with effort focused on understanding why that price is necessary and worthwhile. Only after accepting the fission-driven mindset—viewing multiple contexts as beneficial rather than problematic—does it make sense to address secondary complexities through selective application of CGP's advanced features.
+
+## Primary Complexity: Accepting the Multi-Context Requirement
+
+The irreducible core of CGP's complexity stems from the necessity of managing multiple context types that share code but differ in implementation details. When developers trained in fusion-driven patterns first encounter this multi-context requirement, their instinctive reaction is that it represents unnecessary complexity that could be eliminated through better design. Understanding why this reaction misses the point requires examining what the alternatives actually entail and why they ultimately fail to solve the problem CGP addresses.
+
+The fundamental reality is that software systems genuinely need multiple configurations that differ in specific implementation details while sharing substantial business logic. A production application connects to real databases, sends actual HTTP requests to external APIs, and delivers emails through SMTP servers. A testing configuration uses in-memory mock databases, returns predetermined responses for API calls, and logs emails rather than sending them. These two configurations share almost all their business logic—user authentication, data validation, error handling, transaction management—but differ critically in how they interact with external systems.
+
+Without context-generic programming, teams face a constrained set of alternatives, each with severe limitations. Complete code duplication creates two separate implementations of all shared logic. Every bug fix, every feature addition, every refactoring must be manually propagated to both implementations. This approach is depressingly common precisely because it requires no abstractions—the production code directly uses production types, the test code directly uses test types, and neither needs to accommodate the other's existence. Yet the maintenance burden is immediate and grows linearly with the amount of shared logic.
+
+Runtime dispatch through enums or trait objects avoids duplication by allowing a single context type to hold either production or test implementations behind a common interface. However, this approach trades compile-time type safety for runtime flexibility. The type system becomes unable to distinguish between production and test configurations, making entire categories of bugs undetectable at compile time—nothing prevents accidentally mixing production databases with mock API clients within the same context. Furthermore, runtime dispatch introduces performance overhead through virtual method calls and restricts which traits can be used to only those satisfying object safety requirements.
+
+Feature flags and conditional compilation create the illusion of a single codebase while maintaining multiple parallel implementations selected through `#[cfg]` attributes. This preserves compile-time optimization but creates exponential complexity as feature combinations multiply. More insidiously, it makes testing nightmares where certain feature combinations remain broken because they are rarely exercised together, and prevents using different configurations in different parts of the same binary.
+
+Context-Generic Programming accepts the reality that multiple context types exist and provides tools for writing code that works correctly with all of them. The business logic becomes generic over a context type parameter with trait bounds expressing required capabilities. Each concrete context explicitly implements those required capabilities, and the compiler verifies that all constraints are satisfied before generating specialized code for each context type. This approach achieves compile-time type safety, zero-cost abstraction through monomorphization, and extensibility where new contexts can be added without modifying existing code.
+
+The cost manifests as the need to think abstractly rather than concretely. Instead of writing methods directly on a `ProductionApp` or `TestApp` struct, developers write generic functions parameterized over any context satisfying certain trait bounds. Instead of accessing fields directly, code uses getter traits to abstract over structural differences between contexts. Instead of referencing concrete types, code uses associated types that vary per-context. Each abstraction layer adds cognitive overhead by introducing indirection between the code being written and the concrete types it will eventually work with.
+
+This cognitive overhead represents the primary complexity of CGP, and it is unavoidable. The abstractions are not incidental implementation details that could be designed away—they are the mechanism through which code achieves context polymorphism. The relevant question is not "why does CGP require thinking about generic types and trait bounds?" but rather "given that our system needs multiple contexts, which approach to managing that complexity provides the best trade-offs for our specific requirements?"
+
+The psychological challenge of accepting multi-context management as necessary complexity rather than avoidable overhead cannot be understated. Developers who have internalized fusion-driven patterns find the very existence of multiple context types uncomfortable, viewing it as a design smell indicating that the architecture has gone wrong somewhere. This resistance has legitimate foundations—in codebases where variation is genuinely limited, fusion-driven patterns work well and provide cognitive simplicity that generic abstractions cannot match.
+
+However, the legitimate success of fusion patterns in contexts with limited variation does not invalidate fission-driven approaches in contexts with extensive variation. The key insight is recognizing when a codebase has crossed the threshold where fusion patterns strain under the weight of variation they must accommodate. Enums with dozens of variants, feature flag matrices that have grown unmanageable, duplicated code across multiple contexts that share most logic—these are signals that the codebase would benefit from fission-driven patterns despite their upfront complexity.
+
+Accepting CGP's primary complexity means accepting that in systems with genuine multi-context requirements, the abstractions enabling context polymorphism provide value despite their cognitive overhead. This acceptance is psychological rather than technical—it requires shifting from viewing multiple contexts as a problem to be minimized toward viewing them as a natural consequence of supporting variation. Once this mindset shift occurs, the technical patterns of CGP become tools for managing a necessary complexity rather than obstacles creating unnecessary complexity.
+
+## Managing Secondary Complexity: A Strategic Framework
+
+Having accepted that supporting multiple contexts requires fundamental abstractions, we can now examine CGP's secondary complexities—abstract types, configurable dispatch, and getter traits—with clear understanding that these patterns are optional conveniences rather than unavoidable requirements. Each pattern solves specific problems that arise when writing context-generic code, but each can be selectively applied or avoided based on concrete needs. The key to managing secondary complexity is understanding when each pattern provides genuine value versus when simpler alternatives suffice.
+
+### When to Use Each Pattern
+
+The decision about which patterns to employ should be driven by actual problems encountered rather than speculative future needs. Abstract types address type parameter proliferation when multiple related types need to vary together across contexts. Configurable dispatch enables multiple overlapping implementations to coexist when different contexts genuinely need different approaches to the same capability. Getter traits provide structural independence when contexts organize data differently but need to present uniform interfaces.
+
+**Abstract types become valuable** when you find yourself threading the same type parameters through many trait definitions and implementation blocks. Without abstract types, every trait depending on user-related types must explicitly specify parameters for user IDs, user objects, and potentially other related types. This creates visual noise and maintenance burden as these parameters must be updated everywhere when relationships change. If you're writing trait bounds like `Context: CanQueryUser<UserId, User> + CanUpdateUser<UserId, User> + CanDeleteUser<UserId, User>`, the repetition of `UserId` and `User` signals that abstract types would eliminate duplication.
+
+However, if your system consistently uses the same concrete types across all contexts—perhaps all contexts use `uuid::Uuid` for IDs and the same `User` struct from your domain model—then abstract types provide no benefit. The type relationships are already uniform; making them abstract only adds indirection without solving any actual problem.
+
+**Configurable dispatch becomes necessary** when multiple implementations of the same capability need to coexist and be selected per-context. The classic example is database operations that differ fundamentally between backends—PostgreSQL and SQLite require different SQL dialects, connection handling, and error processing. When `ProductionApp` needs PostgreSQL implementations and `TestApp` needs SQLite implementations of the same query operations, configurable dispatch provides the mechanism for selecting between them.
+
+But when all contexts can use identical implementations—as with the user querying example where the SQL and result processing remain the same regardless of which context executes them—configurable dispatch adds unnecessary machinery. A simple blanket trait implementation provides the same functionality with significantly less complexity. The question to ask: do different contexts genuinely need different implementations, or do they just need access to the same functionality?
+
+**Getter traits enable structural independence** when contexts organize their data differently but share business logic. If `ProductionApp` stores a database connection pool directly as a field while `TestApp` computes database connections on-demand from a factory, getter traits let the query logic remain identical despite these structural differences. The business logic accesses the database through the abstract `database()` method rather than assuming direct field access.
+
+Yet when all contexts share identical structure—all having a `database` field of the same type accessed the same way—the indirection of getter traits becomes unnecessary ceremony. Direct field access works fine and remains simpler to understand for developers unfamiliar with structural typing concepts.
+
+### Minimizing Abstract Type Complexity
+
+Abstract types introduce type-level indirection that transforms concrete type references into associated type lookups. When this indirection accumulates across multiple abstract types with complex relationships, readers must mentally trace through chains of delegation to understand what concrete types will actually be used. The strategy for minimizing this burden involves using fewer abstract types and grouping related types together when they genuinely vary as units.
+
+Consider a trait requiring multiple user-related types:
 
 ````rust
+#[cgp_type]
+pub trait HasUserIdType {
+    type UserId: Clone + PartialEq;
+}
+
+#[cgp_type]
+pub trait HasUserType {
+    type User;
+}
+
+pub trait CanQueryUser: HasUserIdType + HasUserType {
+    fn get_user(&self, user_id: &Self::UserId) -> Result<Self::User>;
+}
+````
+
+This design maximizes flexibility—contexts could theoretically provide different user ID types while sharing user types, or vice versa. But this flexibility likely provides no real benefit since user IDs and users form a conceptual unit where customizing one independently of the other makes little practical sense. Grouping them simplifies the model:
+
+````rust
+#[cgp_type]
+pub trait HasUserTypes {
+    type UserId: Clone + PartialEq;
+    type User;
+}
+
+pub trait CanQueryUser: HasUserTypes {
+    fn get_user(&self, user_id: &Self::UserId) -> Result<Self::User>;
+}
+````
+
+The grouped approach requires understanding only one abstract type trait rather than two, while still providing all necessary flexibility for contexts that genuinely need different user representations.
+
+The most effective minimization strategy is simply using fewer abstract types by keeping types concrete until concrete evidence emerges that abstraction provides value. If all your contexts use `uuid::Uuid` for user IDs, there's no benefit to making user IDs abstract. Wait until you actually need a context using a different ID format before introducing the abstraction.
+
+### Minimizing Configurable Dispatch Complexity
+
+Configurable dispatch through provider traits and component wiring represents CGP's most distinctive and most intimidating feature. The key insight often missed during initial adoption: configurable dispatch is frequently unnecessary. Many traits that appear in CGP codebases don't actually need the full machinery of provider traits and component wiring.
+
+Return to our user querying example. When all contexts use the same `Database` type and execute identical SQL queries, configurable dispatch provides no benefit:
+
+````rust
+// Blanket implementation - no providers needed
+#[cgp_auto_getter]
+pub trait HasDatabase {
+    fn database(&self) -> &Database;
+}
+
+pub trait CanGetUser {
+    fn get_user(&self, user_id: &UserId) -> Result<User>;
+}
+
+impl<Context> CanGetUser for Context
+where
+    Context: HasDatabase,
+{
+    fn get_user(&self, user_id: &UserId) -> Result<User> {
+        let row = self.database().query_row(
+            "SELECT id, email, name FROM users WHERE id = $1",
+            &[user_id],
+        )?;
+        Ok(User::from_row(row))
+    }
+}
+````
+
+This blanket implementation automatically works with any context providing database access. No provider traits, no component wiring, no type-level lookup tables—just a straightforward generic implementation that satisfies all contexts through a simple dependency on `HasDatabase`.
+
+Configurable dispatch becomes valuable only when multiple distinct implementations must coexist. Consider email sending where production contexts send real emails while test contexts record them for verification:
+
+````rust
+pub trait CanSendEmail {
+    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
+}
+
 impl CanSendEmail for ProductionApp {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        // Send email using self.api_client (AwsApiClient)
+        self.api_client.send_email_via_aws(recipient, message)
     }
 }
 
 impl CanSendEmail for TestApp {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        // Record email for later inspection
+        self.api_client.record_email_for_verification(recipient, message);
+        Ok(())
     }
 }
 ````
 
-This direct approach eliminates the entire machinery of provider traits and component wiring. There are no provider structs to define, no `delegate_components!` blocks to write, and no type-level lookup tables to understand. The implementations are straightforward Rust code that any developer can read and modify without understanding CGP's internal mechanisms.
+For capabilities like this where implementations fundamentally differ, direct trait implementation on concrete contexts provides a simpler solution than configurable dispatch. Each context implements the trait directly using its specific approach, eliminating the provider machinery entirely while still enabling context-generic code to call `send_email` uniformly across both contexts.
 
-Comparing this with the typical CGP approach using configurable dispatch highlights the complexity that direct implementation avoids:
+Direct implementation works well when implementations are context-specific and unlikely to be reused. If `ProductionApp`'s email sending will only ever be used by `ProductionApp` and `TestApp`'s verification recording only by `TestApp`, there's no benefit to extracting these into separate provider types. The indirection through providers would only add cognitive overhead without enabling any new capabilities.
+
+Configurable dispatch becomes valuable when implementations are reused across multiple contexts. Suppose you have three contexts—`ProductionApp`, `StagingApp`, and `DevelopmentApp`—all needing to send emails through AWS, while also having `TestApp` and `MockApp` needing verification recording. Extracting these into providers eliminates duplication:
 
 ````rust
 #[cgp_component(EmailSender)]
@@ -1532,301 +1488,89 @@ pub trait HasAwsApiClient {
     fn aws_api_client(&self) -> &AwsApiClient;
 }
 
-#[cgp_auto_getter]
-pub trait HasMockApiClient {
-    fn mock_api_client(&self) -> &MockApiClient;
-}
-
-#[cgp_impl(new SendEmailWithAws)]
+#[cgp_impl(new SendEmailViaAws)]
 impl<Context> EmailSender for Context
 where
     Context: HasAwsApiClient,
 {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        // Send email using context.aws_api_client()
-    }
-}
-
-#[cgp_impl(new MockSendEmail)]
-impl<Context> EmailSender for Context
-where
-    Context: HasMockApiClient,
-{
-    fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()> {
-        // Record email using context.mock_api_client()
+        self.aws_api_client().send_email(recipient, message)
     }
 }
 
 delegate_components! {
-    ProductionApp {
-        EmailSenderComponent:
-            SendEmailWithAws,
-    }
-}
-
-delegate_components! {
-    TestApp {
-        EmailSenderComponent:
-            MockSendEmail,
+    [
+        ProductionApp,
+        StagingApp,
+        DevelopmentApp,
+    ] {
+        EmailSenderComponent: SendEmailViaAws,
     }
 }
 ````
 
-The provider-based approach introduces multiple additional constructs: the `EmailSenderComponent` type generated by `#[cgp_component]`, the provider structs `SendEmailWithAws` and `MockSendEmail`, additional getter traits for accessing the API clients, and the delegation wiring. All this machinery exists to solve a problem that doesn't exist in this scenario—there are no multiple implementations that need to be selected from or composed together.
+Now the AWS email implementation exists in one place and is wired to three contexts, while test contexts can wire alternative providers. The configurable dispatch machinery pays for itself through enabling this reuse.
 
-The direct implementation approach becomes particularly attractive when implementations are truly context-specific and unlikely to be reused. If `SendEmailWithAws` will only ever be used with `ProductionApp` and `MockSendEmail` only with `TestApp`, the indirection through providers and component wiring provides no benefit—it only adds visual noise and cognitive overhead without enabling any additional flexibility.
+The decision criteria becomes clear: use blanket implementations when one implementation works for all contexts, use direct trait implementations when implementations are context-specific, and use configurable dispatch only when multiple implementations need to coexist and be reused across contexts.
 
-### Plain Function Alternative to Configurable Dispatch
+### Minimizing Getter Trait Complexity
 
-When different contexts genuinely require different implementations—but those implementations can be expressed as reusable logic—an intermediate approach exists between direct trait implementation and full configurable dispatch: extracting the implementation logic into plain functions that trait implementations forward to. This pattern provides code reuse without requiring understanding of CGP's provider machinery.
+Getter traits represent CGP's simplest pattern yet paradoxically generate significant resistance from developers who perceive them as introducing "magical" behavior obscuring straightforward field access. The discomfort stems not from technical implementation but from perceived automation—when contexts derive `HasField` and automatically gain multiple getter trait implementations without explicit implementation blocks, this can feel like the framework performs behind-the-scenes operations difficult to trace or understand.
 
-Consider a more complex scenario where an application needs to support multiple database backends:
+The pragmatic response to this discomfort is simply implementing getters manually when automatic derivation feels uncomfortable:
 
 ````rust
-pub struct CloudApp {
-    pub database: Postgres,
-    pub api_client: AwsApiClient,
-}
-
-pub struct EmbeddedApp {
-    pub database: Sqlite,
-    pub api_client: AwsApiClient,
-}
-
-pub struct TestApp {
-    pub database: Sqlite,
-    pub api_client: MockApiClient,
-}
-````
-
-Now the user querying functionality needs different implementations—PostgreSQL and SQLite require different SQL dialects and connection handling. However, both `EmbeddedApp` and `TestApp` share the same `Sqlite` database type, meaning they should share the same query implementation to avoid code duplication.
-
-The plain function approach extracts the database-specific logic into standalone functions:
-
-````rust
-pub trait CanQueryUser {
-    fn query_user(&self, user_id: &UserId) -> Result<User>;
-}
-
-pub fn query_user_with_postgres(database: &Postgres, user_id: &UserId) -> Result<User> {
-    // PostgreSQL-specific SQL query
-    let row = database.query("SELECT * FROM users WHERE id = $1", &[user_id])?;
-    Ok(User::from_row(row))
-}
-
-pub fn query_user_with_sqlite(database: &Sqlite, user_id: &UserId) -> Result<User> {
-    // SQLite-specific SQL query
-    let row = database.query("SELECT * FROM users WHERE id = ?", &[user_id])?;
-    Ok(User::from_row(row))
-}
-
-impl CanQueryUser for CloudApp {
-    fn query_user(&self, user_id: &UserId) -> Result<User> {
-        query_user_with_postgres(&self.database, user_id)
-    }
-}
-
-impl CanQueryUser for EmbeddedApp {
-    fn query_user(&self, user_id: &UserId) -> Result<User> {
-        query_user_with_sqlite(&self.database, user_id)
-    }
-}
-
-impl CanQueryUser for TestApp {
-    fn query_user(&self, user_id: &UserId) -> Result<User> {
-        query_user_with_sqlite(&self.database, user_id)
-    }
-}
-````
-
-This approach successfully achieves code reuse—both `EmbeddedApp` and `TestApp` call the same `query_user_with_sqlite` function, avoiding duplication. The trait implementations become thin wrappers that simply forward to the appropriate function, making it obvious which implementation each context uses. No understanding of provider traits or component wiring is required.
-
-However, this pattern reveals its verbosity when compared to the CGP equivalent using configurable dispatch:
-
-````rust
-#[cgp_component(UserQuerier)]
-pub trait CanQueryUser {
-    fn query_user(&self, user_id: &UserId) -> Result<User>;
-}
-
-#[cgp_auto_getter]
-pub trait HasPostgres {
-    fn postgres(&self) -> &Postgres;
-}
-
-#[cgp_auto_getter]
-pub trait HasSqlite {
-    fn sqlite(&self) -> &Sqlite;
-}
-
-#[cgp_impl(new QueryUserWithPostgres)]
-impl<Context> UserQuerier for Context
-where
-    Context: HasPostgres,
-{
-    fn query_user(&self, user_id: &UserId) -> Result<User> {
-        let database = self.postgres();
-        // PostgreSQL-specific SQL query
-    }
-}
-
-#[cgp_impl(new QueryUserWithSqlite)]
-impl<Context> UserQuerier for Context
-where
-    Context: HasSqlite,
-{
-    fn query_user(&self, user_id: &UserId) -> Result<User> {
-        let database = self.sqlite();
-        // SQLite-specific SQL query
-    }
-}
-
-delegate_components! {
-    CloudApp {
-        UserQuerierComponent:
-            QueryUserWithPostgres,
-    }
-}
-
-delegate_components! {
-    EmbeddedApp {
-        UserQuerierComponent:
-            QueryUserWithSqlite,
-    }
-}
-
-delegate_components! {
-    TestApp {
-        UserQuerierComponent:
-            QueryUserWithSqlite,
-    }
-}
-````
-
-The CGP approach introduces additional constructs—the `UserQuerierComponent` type, the provider structs, getter traits, and delegation blocks. However, it eliminates the need to write separate trait implementation blocks for each context. More importantly, the CGP approach scales better: if a fourth context needs to be added that uses PostgreSQL, only a new `delegate_components!` block is required, whereas the plain function approach requires writing another complete trait implementation.
-
-The trade-off becomes clear: the plain function approach requires less upfront understanding of CGP machinery but creates more boilerplate as contexts proliferate. The CGP approach requires understanding provider traits and component wiring but reduces per-context boilerplate to a simple delegation declaration. For codebases with two or three contexts, the plain function approach may be simpler. For codebases with many contexts sharing implementations, configurable dispatch provides clearer organization and less repetition.
-
-### When Configurable Dispatch Provides Value
-
-The examples above reveal clear criteria for when configurable dispatch justifies its complexity:
-
-**Use configurable dispatch when:**
-
-1. **Multiple implementations exist** - There are genuinely different ways to implement a capability (PostgreSQL vs SQLite queries, AWS vs mock email sending)
-
-2. **Implementations are reused across contexts** - Multiple contexts need the same implementation (both `EmbeddedApp` and `TestApp` using SQLite queries)
-
-3. **Contexts have different requirements** - Different contexts need different implementations of the same trait (production needs real email sending, tests need mock email sending)
-
-**Avoid configurable dispatch when:**
-
-1. **One implementation suffices** - All contexts can use the same generic implementation through blanket traits (database access when all contexts use the same `Database` type)
-
-2. **Implementations are context-specific** - Each implementation is only used by one context and unlikely to be reused (custom business logic specific to production or test environments)
-
-3. **Simple forwarding works** - Plain functions can provide reusable logic with minimal boilerplate (when there are only two or three contexts)
-
-The key insight is recognizing that configurable dispatch is an optimization for a specific problem: enabling code reuse when multiple contexts need to select from multiple available implementations. When this problem doesn't exist—either because there's only one implementation, or because implementations aren't reused across contexts—the machinery of configurable dispatch creates unnecessary complexity without providing compensating benefits.
-
-This selective application of configurable dispatch represents a crucial skill for managing CGP complexity. Rather than treating CGP as an all-or-nothing proposition where every trait becomes a component with providers and wiring, developers should recognize it as a toolbox where different patterns suit different situations. Blanket traits, direct implementations, plain functions, and configurable dispatch each have appropriate use cases, and skilled CGP practitioners learn to recognize which tool fits each situation.
-
-## Secondary Complexity: Getter Traits
-
-Getter traits represent CGP's simplest and most accessible pattern, yet paradoxically generate significant resistance from developers who perceive them as introducing "magical" behavior obscuring straightforward field access. The primary discomfort stems not from technical implementation but from perceived automation—when contexts derive `HasField` and automatically gain multiple getter trait implementations without explicit implementation blocks, this can feel like the framework performs behind-the-scenes operations difficult to trace or understand.
-
-Consider a simple context using auto-generated getters:
-
-```rust
-#[cgp_auto_getter]
-pub trait HasName {
-    fn name(&self) -> &str;
-}
-
-#[cgp_auto_getter]
-pub trait HasAge {
-    fn age(&self) -> u8;
-}
-
-#[derive(HasField)]
-pub struct Person {
-    pub name: String,
-    pub age: u8,
-}
-```
-
-For developers accustomed to seeing explicit trait implementations, the `Person` struct appears to magically satisfy both `HasName` and `HasAge` without visible implementation code. When calling `person.name()`, they see a method invocation with no apparent source—no `impl HasName for Person` block exists to serve as obvious functionality source.
-
-This opacity breaks fundamental debugging workflows. IDE tooling struggles providing accurate "go to definition" navigation for auto-generated implementations, often either failing to navigate or jumping to macro definitions rather than generated code. When compilation fails due to missing or incompatible getters, error messages reference blanket implementations and `HasField` trait rather than pointing directly at concrete types, making it harder to identify needed fixes.
-
-The perception of magical behavior amplifies when developers compare getter traits to explicit field access they replace. Without getter traits, code is completely transparent—every field access is explicit, data flow can be traced directly by reading function bodies. When refactored to use getter traits with trait bounds and method calls, the transformation feels like unnecessary complexity has been added for questionable benefit.
-
-### The Core Benefit: Structural Typing
-
-The key to understanding getter traits is recognizing them as a bridge toward structural typing concepts unfamiliar in Rust but common in other language ecosystems. Languages like TypeScript, OCaml, and Go provide structural subtyping where types are compatible based on their structure—the fields and methods they provide—rather than nominal relationships through explicit type declarations. Getter traits bring structural typing to Rust through trait-based abstraction, but indirection through traits makes the pattern feel foreign to developers whose intuitions are shaped by Rust's nominal type system.
-
-The perceived complexity stems not from technical difficulty but from conceptual unfamiliarity. Developers who have never encountered structural typing must simultaneously learn both the concept—that types can be compatible based on provided capabilities rather than explicit declarations—and the implementation mechanism through getter traits and automatic derivation. This compound learning requirement explains why getter traits feel disproportionately complex relative to their technical simplicity.
-
-Once the principle is internalized that context-generic code should depend on capabilities rather than concrete types, the specific mechanism of getter traits becomes less important—they are simply one way to express structural requirements in Rust's type system. Developers who master getter traits through CGP often find it easier to understand structural typing in other languages, having built intuition about how structural compatibility enables code reuse.
-
-### Manual Implementation Versus Automatic Derivation
-
-The tension in getter trait design lies in balancing boilerplate reduction that automatic derivation provides against explicitness that manual implementation offers. Recognizing that automation contributes significantly to perceived magical behavior, one pragmatic approach is encouraging manual getter trait implementation when automatic derivation feels uncomfortable.
-
-A manually implemented getter looks identical to any other trait implementation:
-
-```rust
 pub trait HasDatabase {
     fn database(&self) -> &Database;
 }
 
-pub struct Application {
+pub struct ProductionApp {
     pub database: Database,
-    pub api_client: ApiClient,
+    pub api_client: ProductionApiClient,
 }
 
-impl HasDatabase for Application {
+impl HasDatabase for ProductionApp {
     fn database(&self) -> &Database {
         &self.database
     }
 }
-```
+````
 
-This explicit implementation eliminates perception of magic—developers can see exactly where the `database()` method comes from when reading code or using IDE navigation. Implementation blocks serve as clear documentation of how getter traits are satisfied, and modifications follow standard Rust patterns without requiring understanding of macro-generated code.
+This explicit implementation eliminates perception of magic—developers can see exactly where the `database()` method comes from when reading code or using IDE navigation. The implementation blocks serve as clear documentation of how getter traits are satisfied, and modifications follow standard Rust patterns without requiring understanding of macro-generated code.
 
-The trade-off is evident: manual implementations introduce significant boilerplate scaling linearly with getter traits and contexts. In codebases with dozens of getters and multiple contexts, maintaining these explicit implementations becomes tedious and error-prone. However, this boilerplate serves a pedagogical purpose during learning—when developers first encounter getter traits, seeing explicit implementations helps them understand that getters are simply standard Rust trait implementations with no special runtime behavior or hidden complexity.
+The trade-off is evident: manual implementations introduce significant boilerplate scaling linearly with getter traits and contexts. However, this boilerplate serves a pedagogical purpose during learning—when developers first encounter getter traits, seeing explicit implementations helps them understand that getters are simply standard Rust trait implementations with no special runtime behavior or hidden complexity.
 
-Manual implementation also provides flexibility for situations where automatic derivation is insufficient. Some getters may need to perform transformations rather than returning direct references, compute values rather than accessing stored fields, or access nested structures:
+Manual implementation also provides flexibility for situations where automatic derivation is insufficient. Some getters may need to compute values rather than return direct references, access nested structures, or perform transformations:
 
-```rust
+````rust
 pub trait HasDatabaseUrl {
     fn database_url(&self) -> &str;
 }
 
-pub struct Application {
+pub struct ProductionApp {
     pub database_config: DatabaseConfig,
 }
 
-impl HasDatabaseUrl for Application {
+impl HasDatabaseUrl for ProductionApp {
     fn database_url(&self) -> &str {
         &self.database_config.url
     }
 }
-```
+````
 
-The getter accesses a nested field and potentially performs type conversion, behavior that cannot be expressed through simple field-based derivation. Manual implementation enables these customizations while maintaining the same trait-based interface that context-generic code depends upon.
+The key insight: getter trait complexity is almost entirely about perceived magic rather than actual technical difficulty. Manual implementation eliminates the perception while maintaining all the benefits of structural typing—context-generic code can depend on capabilities rather than concrete field layouts, enabling code reuse across contexts with different structural organizations.
 
-## Additional Complexity: Functional Programming Patterns
+For teams that have internalized structural typing concepts and are comfortable with automatic derivation, the `#[derive(HasField)]` and `#[cgp_auto_getter]` attributes provide significant convenience. For teams still building comfort, manual implementation provides a gentler on-ramp that trades some boilerplate for explicit clarity.
 
-Beyond the core CGP patterns of abstract types, configurable static dispatch, and getter traits, an additional layer of complexity emerges when functional programming patterns are applied within the CGP framework. This complexity is optional and can be avoided entirely, but understanding it helps teams make informed decisions about when functional composition provides benefits worth its cognitive overhead. Higher-order providers—providers that accept other providers as generic parameters—enable powerful composition patterns but require developers to reason about multiple abstraction layers simultaneously.
+## Special Topic: Functional Programming Patterns
 
-### The Relationship Between Plain Functions and CGP Components
+Beyond the core CGP patterns, an additional layer of complexity emerges when functional programming patterns are applied within the CGP framework. Higher-order providers—providers that accept other providers as generic parameters—enable powerful composition patterns but require developers to reason about multiple abstraction layers simultaneously. This complexity is entirely optional and can be avoided completely, but understanding it helps teams make informed decisions about when functional composition provides benefits worth its cognitive overhead.
 
-At its core, CGP can be understood as a sophisticated system for managing function parameters and composition that would otherwise require explicit threading through code. When a CGP component trait contains only a single method, there exists a near one-to-one correspondence between a provider implementation and a plain function. The provider simply wraps the function in trait syntax, extracting parameters from the context rather than receiving them as explicit function arguments.
+At its core, CGP can be understood as a sophisticated system for managing function parameters and composition. When a CGP component trait contains only a single method, there exists near one-to-one correspondence between a provider implementation and a plain function. The provider wraps the function in trait syntax, extracting parameters from the context rather than receiving them as explicit function arguments.
 
-Consider how a simple area calculation looks as both a plain function and a CGP component:
+Consider how a simple calculation looks as both a plain function and a CGP component:
 
-```rust
+````rust
 // Plain function - requires explicit parameters
 pub fn rectangle_area(width: f64, height: f64) -> f64 {
     width * height
@@ -1853,107 +1597,15 @@ where
         rectangle_area(self.width(), self.height())
     }
 }
-```
+````
 
-The provider implementation essentially adapts the plain function to work with contexts providing width and height through the `HasRectangleFields` interface. The core logic remains in the plain function, while the provider handles extracting parameters from the context. This separation allows business logic to remain pure and easily testable while the context-dependent adaptation layer handles dependency resolution.
+The provider implementation adapts the plain function to work with contexts providing dimensions through the `HasRectangleFields` interface. The core logic remains in the plain function while the provider handles dependency extraction.
 
-This correspondence reveals why many functional programming concepts translate naturally into CGP patterns. Higher-order functions become higher-order providers, function composition becomes provider composition, and dependency injection through function parameters becomes dependency injection through trait bounds. CGP essentially provides object-oriented syntax for expressing functional programming patterns, making these techniques more palatable to developers who find functional programming syntax unfamiliar or uncomfortable.
+This correspondence reveals why functional programming concepts translate naturally into CGP patterns. Higher-order functions become higher-order providers, function composition becomes provider composition, and dependency injection through function parameters becomes dependency injection through trait bounds. CGP essentially provides object-oriented syntax for expressing functional programming patterns.
 
-However, attempting to use plain functions for everything encounters severe practical limitations. As dependency counts grow, parameter lists become unwieldy and must be threaded through every layer of the call stack. Consider implementing user creation that depends on database, email sender, and logger:
+Higher-order providers accept other providers as generic type parameters, enabling composition at the type level rather than the value level:
 
-```rust
-pub fn create_user<D, E, L>(
-    database: &D,
-    email_sender: &E,
-    logger: &L,
-    email: &EmailAddress,
-) -> Result<User>
-where
-    D: DatabaseOps,
-    E: EmailSender,
-    L: Logger,
-{
-    logger.info("Creating new user");
-    let user = User::new(email);
-
-    database.execute(
-        "INSERT INTO users (id, email, name, created_at) VALUES ($1, $2, $3, $4)",
-        &[&user.id, &user.email, &user.name, &user.created_at],
-    )?;
-
-    email_sender.send_welcome_email(&user)?;
-    logger.info(&format!("Created user {}", user.id));
-
-    Ok(user)
-}
-```
-
-Any function calling `create_user` must accept and forward all these parameters, even if it doesn't directly use them. If we add audit logging requiring another parameter, every function in the call chain needs updating. This parameter threading creates brittleness and maintenance burden that trait-based dependency injection avoids:
-
-```rust
-pub trait CanCreateUser {
-    fn create_user(&self, email: &EmailAddress) -> Result<User>;
-}
-
-impl<Context> CanCreateUser for Context
-where
-    Context: HasDatabase + CanSendEmail + HasLogger,
-{
-    fn create_user(&self, email: &EmailAddress) -> Result<User> {
-        self.logger().info("Creating new user");
-        let user = User::new(email);
-
-        self.database().execute(
-            "INSERT INTO users (id, email, name, created_at) VALUES ($1, $2, $3, $4)",
-            &[&user.id, &user.email, &user.name, &user.created_at],
-        )?;
-
-        self.send_welcome_email(&user)?;
-        self.logger().info(&format!("Created user {}", user.id));
-
-        Ok(user)
-    }
-}
-```
-
-Adding a new dependency like audit logging only requires adding `HasAuditLogger` to the trait bound and calling `self.audit_log()` where needed. Functions calling `create_user` don't require any changes—they already have access to the context providing all dependencies.
-
-### Higher-Order Functions and Composition Challenges in Rust
-
-The limitations of plain functions become even more apparent when attempting functional composition patterns. Higher-order functions—functions that accept or return other functions—enable elegant composition in languages like Haskell, but Rust's syntax makes these patterns awkward and verbose.
-
-Consider implementing a scaling transformation for area calculations. In a functional style, we might write a higher-order function:
-
-```rust
-pub fn scaled_area<Context>(
-    scale_factor: f64,
-    inner_calculator: impl Fn(&Context) -> f64,
-) -> impl Fn(&Context) -> f64 {
-    move |context| inner_calculator(context) * scale_factor
-}
-```
-
-This function accepts an area calculator and returns a new calculator that scales the result. However, using it requires verbose closure construction that cannot be easily named at the module level:
-
-```rust
-// We want to write something like this:
-pub fn scaled_rectangle_area<Context>(context: &Context) -> f64
-where
-    Context: HasRectangleFields + HasScaleFactor,
-{
-    scaled_area(context.scale_factor(), rectangle_area)(context)
-}
-```
-
-But even this simplified version shows the awkwardness—the `scaled_area` function must be called every time we want to use the scaled calculator, reconstructing the closure repeatedly. We cannot define a top-level function like `fn scaled_rectangle_area = scaled_area(rectangle_area)` as we might in Haskell, because Rust requires explicit generic parameter declarations and trait bounds.
-
-Furthermore, if the higher-order function needs to express constraints on the context, these constraints must be propagated explicitly. The more generic parameters and constraints involved, the more unwieldy the syntax becomes.
-
-### Higher-Order Providers: CGP's Solution to Composition
-
-CGP's higher-order providers provide a more ergonomic approach to composition that works naturally with Rust's type system. Instead of accepting functions as parameters, providers accept other providers as generic type parameters:
-
-```rust
+````rust
 pub struct ScaledArea<InnerCalculator>(pub PhantomData<InnerCalculator>);
 
 #[cgp_auto_getter]
@@ -1971,123 +1623,52 @@ where
         InnerCalculator::area(self) * self.scale_factor()
     }
 }
-```
+````
 
-This provider accepts another provider as a generic parameter and delegates to it, scaling the result. The composition is expressed through type-level programming rather than value-level closures. Crucially, we can now define a composed provider as a simple type alias:
+This provider accepts another provider as a generic parameter and delegates to it, scaling the result. The composition is expressed through type-level programming, producing specialized code at monomorphization time with no runtime overhead.
 
-```rust
-type ScaledRectangleArea = ScaledArea<RectangleArea>;
-```
+The tension with object-oriented design preferences manifests clearly here. Object-oriented developers tend toward comprehensive interfaces grouping all related functionality:
 
-This alias creates a new provider that composes scaling with rectangle area calculation, with no runtime overhead and no awkward closure syntax. The type system tracks all the constraints—`ScaledRectangleArea` can only be used with contexts that provide both rectangle fields and a scale factor—and the compiler generates specialized code at monomorphization time.
-
-Compare the conciseness with the Haskell-style composition we aspired to earlier. CGP's approach achieves similar elegance but works within Rust's type system constraints rather than fighting against them. The syntax is more verbose than Haskell's but dramatically simpler than attempting equivalent composition with higher-order functions and closures.
-
-### The Tension Between Functional and Object-Oriented Trait Design
-
-The functional programming patterns that CGP enables create tension with object-oriented design preferences that many Rust developers bring from other languages. This tension manifests most clearly in debates about trait granularity and comprehensiveness.
-
-Object-oriented developers tend to design comprehensive interfaces grouping all related functionality together:
-
-```rust
-#[cgp_component(ShapeProvider)]
-pub trait HasShape {
-    type Scalar: Copy + Add + Mul;
-    type Angle: Copy + Add + Mul;
-
-    fn area(&self) -> Self::Scalar;
-    fn perimeter(&self) -> Self::Scalar;
-    fn scale(&mut self, factor: Self::Scalar);
-    fn rotate(&mut self, angle: Self::Angle);
+````rust
+pub trait Shape {
+    fn area(&self) -> f64;
+    fn perimeter(&self) -> f64;
+    fn scale(&mut self, factor: f64);
+    fn rotate(&mut self, angle: f64);
 }
-```
+````
 
-This monolithic trait provides a complete "shape interface" with all operations a shape might support. From an OOP perspective, this makes sense—a shape is a conceptual entity with various capabilities, and the trait represents that complete abstraction.
+Higher-order providers that want to customize only area calculation must forward all other methods as pass-through boilerplate. The functional approach splits capabilities into focused traits:
 
-However, this design creates severe problems for higher-order providers and functional composition. Consider trying to write a provider that scales any shape:
-
-```rust
-#[cgp_impl(new ScaledShape<InnerProvider>)]
-impl<Context, InnerProvider> ShapeProvider for Context
-where
-    InnerProvider: ShapeProvider<Context>,
-{
-    type Scalar = InnerProvider::Scalar;
-    type Angle = InnerProvider::Angle;
-
-    fn area(&self) -> Self::Scalar {
-        InnerProvider::area(self) * self.scale_factor()
-    }
-
-    // Must forward all other methods as pass-through
-    fn perimeter(&self) -> Self::Scalar {
-        InnerProvider::perimeter(self)
-    }
-
-    fn scale(&mut self, factor: Self::Scalar) {
-        InnerProvider::scale(self, factor)
-    }
-
-    fn rotate(&mut self, angle: Self::Angle) {
-        InnerProvider::rotate(self, angle)
-    }
-}
-```
-
-The provider must implement every method in the trait, even though it only wants to customize one of them. The other methods become tedious boilerplate forwarding to the inner provider. As the trait grows, this forwarding burden increases. Worse, if someone adds a new method to the trait, every higher-order provider must be updated to forward it, even if the new method is completely unrelated to their concerns.
-
-The functional approach splits capabilities into focused traits:
-
-```rust
-#[cgp_type]
-pub trait HasScalarType {
-    type Scalar: Copy + Add + Mul;
-}
-
+````rust
 #[cgp_component(AreaCalculator)]
-pub trait HasArea: HasScalarType {
-    fn area(&self) -> Self::Scalar;
+pub trait HasArea {
+    fn area(&self) -> f64;
 }
 
 #[cgp_component(PerimeterCalculator)]
-pub trait HasPerimeter: HasScalarType {
-    fn perimeter(&self) -> Self::Scalar;
+pub trait HasPerimeter {
+    fn perimeter(&self) -> f64;
 }
+````
 
-#[cgp_component(Scaler)]
-pub trait CanScale: HasScalarType {
-    fn scale(&mut self, factor: Self::Scalar);
-}
-```
+Now higher-order providers can be precisely targeted—a scaling provider only implements the area calculation it cares about without needing to know about perimeter, rotation, or future methods.
 
-Now higher-order providers can be precisely targeted:
+However, developers from OOP backgrounds often perceive this decomposition as fragmentation making APIs harder to discover and use. The learning curve for teams making this transition can be significant, requiring unlearning deeply ingrained assumptions about how abstractions should be structured. This represents a distinct adoption challenge beyond CGP's core patterns, explaining why some teams struggle even after mastering blanket implementations and getter traits.
 
-```rust
-#[cgp_impl(new ScaledArea<InnerCalculator>)]
-impl<Context, InnerCalculator> AreaCalculator for Context
-where
-    Context: HasScaleFactor,
-    InnerCalculator: AreaCalculator<Context>,
-{
-    fn area(&self) -> Self::Scalar {
-        InnerCalculator::area(self) * self.scale_factor()
-    }
-}
-```
+The practical implication: teams should approach higher-order providers cautiously, introducing them only when concrete composition needs emerge that simpler patterns cannot address. The majority of CGP usage can succeed with blanket implementations and basic provider traits without ever requiring higher-order composition.
 
-This provider only needs to implement the one method it cares about. It doesn't need to know about perimeter, scaling operations, or any future methods that might be added. The composition is clean and focused.
-
-However, developers from OOP backgrounds often perceive this decomposition as fragmentation that makes the API harder to discover and use. They ask "where's the complete shape interface?" and feel uncomfortable with capabilities scattered across many small traits. The learning curve for teams making this transition can be significant, as it requires unlearning deeply ingrained assumptions about how abstractions should be structured.
-
-## Conclusion: Selective Application Philosophy
+## Conclusion: Strategic Complexity Management
 
 The overarching lesson of this chapter is that successful CGP adoption requires distinguishing between complexity that must be accepted and complexity that can be managed through selective application of features. The primary complexity—managing multiple contexts simultaneously—is unavoidable if CGP is to provide value. Teams must accept this complexity as the foundation of the fission-driven approach, focusing effort on understanding why supporting multiple contexts justifies the abstractions required.
 
-The secondary complexities—abstract types, configurable dispatch, getter traits, and functional patterns—can be selectively minimized through pragmatic design choices. Not every type needs abstraction, not every trait needs configurable dispatch, not every field accessor needs a getter trait, and not every composition challenge needs higher-order providers. The question to ask repeatedly is: does this particular feature provide concrete benefits that justify its cognitive overhead in this specific context?
+The secondary complexities—abstract types, configurable dispatch, and getter traits—can be selectively minimized through pragmatic design choices guided by clear decision criteria. Use abstract types when type parameter proliferation becomes painful, not speculatively. Apply configurable dispatch when multiple implementations must coexist and be reused, not for every trait. Implement getter traits manually when automatic derivation feels uncomfortable, accepting the boilerplate as a learning aid. Approach functional composition patterns cautiously, introducing them only when simpler alternatives prove insufficient.
 
-This selective application philosophy enables teams to find their own balance between simplicity and power. Some teams may embrace CGP's full technical machinery, accepting the learning curve as worthwhile for the flexibility gained. Others may use only blanket traits and manual implementations, gaining multi-context support while avoiding advanced features. Most will likely fall somewhere in between, applying different patterns to different parts of the codebase based on specific requirements and constraints.
+This selective application philosophy enables teams to find their own balance between simplicity and power. Some teams may embrace CGP's full technical machinery, accepting the learning curve as worthwhile for the flexibility gained. Others may use only blanket traits and manual implementations, gaining multi-context support while avoiding advanced features. Most will likely fall somewhere between, applying different patterns to different parts of the codebase based on specific requirements.
 
-The next chapter explores how this selective philosophy extends to integration with fusion-driven patterns, demonstrating that CGP need not be an all-or-nothing commitment but can productively coexist with classical Rust patterns within the same codebase.
+The key insight is recognizing that CGP provides a toolkit rather than an all-or-nothing framework. Each pattern—blanket implementations, abstract types, configurable dispatch, getter traits—serves specific purposes and can be adopted independently. Teams can start with simple blanket implementations and expand selectively as concrete needs emerge, rather than committing to comprehensive adoption upfront. This incremental approach, combined with clear understanding of which complexities are unavoidable and which are optional, provides the foundation for successful navigation of CGP's learning curve.
+
+Having established how to manage CGP's complexity through selective application of its features, the next chapter explores how these patterns can productively coexist with classical fusion-driven approaches within the same codebase. Understanding that CGP need not be an all-or-nothing commitment opens possibilities for hybrid architectures that strategically apply each paradigm where it provides the most value.
 
 ---
 
