@@ -8,62 +8,99 @@ The adoption challenge stems primarily from Rust's deeply embedded fusion-centri
 
 ## Table of Contents
 
-1. **Foundations: Defining Context-Generic Programming**
-   - Context polymorphism through compile-time generics
-   - Distinguishing CGP from runtime polymorphism approaches
+- [Chapter 1: Foundations: Defining Context-Generic Programming](#chapter-1-foundations-defining-context-generic-programming)
+  - [Context Polymorphism Through Compile-Time Generics](#context-polymorphism-through-compile-time-generics)
+  - [Distinguishing CGP from Runtime Polymorphism Approaches](#distinguishing-cgp-from-runtime-polymorphism-approaches)
 
-2. **The Spectrum of Context-Polymorphic Code**
-   - From trait objects to generic functions
-   - CGP components and configurable dispatch
-   - Plain functions and functional programming
+- [Chapter 2: The Spectrum of Context-Polymorphic Code](#chapter-2-the-spectrum-of-context-polymorphic-code)
+  - [Dynamic Dispatch and Trait Objects](#dynamic-dispatch-and-trait-objects)
+  - [The Impl Trait Bridge](#the-impl-trait-bridge)
+  - [Generic Functions and Visible Abstraction](#generic-functions-and-visible-abstraction)
+  - [Blanket Trait Implementations](#blanket-trait-implementations)
+  - [CGP Components and Configurable Dispatch](#cgp-components-and-configurable-dispatch)
+  - [Plain Functions and Functional Programming](#plain-functions-and-functional-programming)
 
-3. **The Three Pillars of CGP Benefits**
-   - Structural typing through getter traits
-   - Type dictionaries through abstract types
-   - Extensibility through configurable static dispatch
+- [Chapter 3: The Three Pillars of CGP Benefits](#chapter-3-the-three-pillars-of-cgp-benefits)
+  - [Structural Typing Through Getter Traits](#structural-typing-through-getter-traits)
+  - [Type Dictionaries Through Abstract Types](#type-dictionaries-through-abstract-types)
+  - [Extensibility Through Configurable Static Dispatch](#extensibility-through-configurable-static-dispatch)
+  - [How the Pillars Compose](#how-the-pillars-compose)
 
-4. **Fusion versus Fission: A New Conceptual Framework**
-   - Defining fusion-driven and fission-driven development
-   - The philosophical divergence between paradigms
+- [Chapter 4: Fusion versus Fission: A New Conceptual Framework](#chapter-4-fusion-versus-fission-a-new-conceptual-framework)
+  - [Defining Fusion-Driven Development](#defining-fusion-driven-development)
+  - [Defining Fission-Driven Development](#defining-fission-driven-development)
+  - [The Philosophical Divergence Between Paradigms](#the-philosophical-divergence-between-paradigms)
 
-5. **The Landscape of Fusion-Driven Patterns**
-   - Enums, feature flags, and dynamic dispatch
-   - Generic parameters and concrete implementations
+- [Chapter 5: The Landscape of Fusion-Driven Patterns](#chapter-5-the-landscape-of-fusion-driven-patterns)
+  - [Enums and Sum Types](#enums-and-sum-types)
+  - [Feature Flags and Conditional Compilation](#feature-flags-and-conditional-compilation)
+  - [Dynamic Dispatch Through Trait Objects](#dynamic-dispatch-through-trait-objects)
+  - [Generic Struct Parameters and Coherence Constraints](#generic-struct-parameters-and-coherence-constraints)
+  - [Context-Specific Code and Direct Trait Implementation](#context-specific-code-and-direct-trait-implementation)
+  - [The Appeal and Limitations of Fusion](#the-appeal-and-limitations-of-fusion)
 
-6. **Fission-Driven Patterns Across Languages**
-   - Duck typing, inheritance, and reflection
-   - CGP's unique compile-time approach
+- [Chapter 6: Fission-Driven Patterns Across Languages](#chapter-6-fission-driven-patterns-across-languages)
+  - [Duck Typing in Dynamic Languages](#duck-typing-in-dynamic-languages)
+  - [Inheritance and Subtyping in Object-Oriented Programming](#inheritance-and-subtyping-in-object-oriented-programming)
+  - [Interfaces and Mixins](#interfaces-and-mixins)
+    - [Interfaces in Java and Go](#interfaces-in-java-and-go)
+    - [The Limitations of Interface-Based Code Reuse](#the-limitations-of-interface-based-code-reuse)
+    - [Mixins in Dynamic Languages](#mixins-in-dynamic-languages)
+    - [Challenges in Static Typed Languages](#challenges-in-static-typed-languages)
+  - [Runtime Reflection and Type Erasure](#runtime-reflection-and-type-erasure)
+  - [CGP's Unique Position in the Design Space](#cgps-unique-position-in-the-design-space)
 
-7. **Why Rust Embraces Fusion**
-   - Language constraints and cultural values
-   - The success of reflection-based frameworks
-   - The cognitive comfort of monolithic contexts
+- [Chapter 7: Why Rust Embraces Fusion](#chapter-7-why-rust-embraces-fusion)
+  - [Language Design Constraints Limiting Fission Patterns](#language-design-constraints-limiting-fission-patterns)
+  - [Cultural Values and Framework Design](#cultural-values-and-framework-design)
+  - [The Cognitive Comfort of Monolithic Contexts](#the-cognitive-comfort-of-monolithic-contexts)
 
-8. **The Adoption Challenge**
-   - The chicken-and-egg problem
-   - Forward compatibility limitations
-   - Addressing vendor lock-in concerns
+- [Chapter 8: The Adoption Challenge](#chapter-8-the-adoption-challenge)
+  - [The Chicken-and-Egg Problem: Breaking the Circular Dependency](#the-chicken-and-egg-problem-breaking-the-circular-dependency)
+  - [Forward Compatibility Without Evidence: Why "Just In Case" Arguments Fail](#forward-compatibility-without-evidence-why-just-in-case-arguments-fail)
+  - [Perceived Lock-In and Escape Hatches](#perceived-lock-in-and-escape-hatches)
 
-9. **Managing CGP Complexity**
-   - Primary complexity: accepting multiple contexts
-   - Minimizing abstract types and configurable dispatch
-   - Managing getter trait overhead
-   - Functional programming patterns
+- [Chapter 9: Managing CGP Complexity](#chapter-9-managing-cgp-complexity)
+  - [The Complexity Hierarchy: A Framework for Navigation](#the-complexity-hierarchy-a-framework-for-navigation)
+  - [Primary Complexity: Accepting the Multi-Context Requirement](#primary-complexity-accepting-the-multi-context-requirement)
+  - [Managing Secondary Complexity: A Strategic Framework](#managing-secondary-complexity-a-strategic-framework)
+    - [When to Use Each Pattern](#when-to-use-each-pattern)
+    - [Minimizing Abstract Type Complexity](#minimizing-abstract-type-complexity)
+    - [Minimizing Configurable Dispatch Complexity](#minimizing-configurable-dispatch-complexity)
+    - [Minimizing Getter Trait Complexity](#minimizing-getter-trait-complexity)
+    - [Special Topic: Functional Programming Patterns](#special-topic-functional-programming-patterns)
+  - [Conclusion: Strategic Complexity Management](#conclusion-strategic-complexity-management)
 
-10. **Fusion-Fission Hybrids: Practical Integration**
-    - Classical traits with CGP components
-    - Strategic use of enums and generic parameters
-    - Preventing context proliferation
+- [Chapter 10: Fusion-Fission Hybrids: Practical Integration Strategies](#chapter-10-fusion-fission-hybrids-practical-integration-strategies)
+  - [The Decision Framework: When to Apply Fusion vs. Fission](#the-decision-framework-when-to-apply-fusion-vs-fission)
+  - [Selective Fission: Blanket Implementations for Shared Logic](#selective-fission-blanket-implementations-for-shared-logic)
+  - [Selective Fusion: Generic Parameters for Configuration Variation](#selective-fusion-generic-parameters-for-configuration-variation)
+  - [Strategic Runtime Dispatch: When Compile-Time Isn't Enough](#strategic-runtime-dispatch-when-compile-time-isnt-enough)
+  - [Decision Framework: Identifying Variation Types](#decision-framework-identifying-variation-types)
+  - [Practical Integration: A Worked Example](#practical-integration-a-worked-example)
+  - [Conclusion: Synthesis and Next Steps](#conclusion-synthesis-and-next-steps)
 
-11. **Incremental Adoption Strategy**
-    - Identifying candidates for context splitting
-    - Precision refactoring approaches
-    - Balancing stability with flexibility
+- [Chapter 11: Incremental Adoption Strategy](#chapter-11-incremental-adoption-strategy)
+  - [The Incremental Adoption Mindset](#the-incremental-adoption-mindset)
+  - [Identifying Your Starting Point](#identifying-your-starting-point)
+  - [The Refactoring Cycle](#the-refactoring-cycle)
+  - [Managing the Transition Period](#managing-the-transition-period)
+  - [Conclusion](#conclusion)
 
-12. **Conclusions and Recommendations**
-    - Minimum viable agreements for adoption
-    - Practical guidelines and common objections
-    - Future directions
+- [Chapter 12: Conclusions and Recommendations](#chapter-12-conclusions-and-recommendations)
+  - [Key Findings](#key-findings)
+    - [CGP Represents a Paradigm Shift, Not Just a Technical Pattern](#cgp-represents-a-paradigm-shift-not-just-a-technical-pattern)
+    - [Primary Complexity Is Unavoidable; Secondary Complexity Is Optional](#primary-complexity-is-unavoidable-secondary-complexity-is-optional)
+    - [Rust's Fusion-Centric Culture Creates Adoption Barriers](#rusts-fusion-centric-culture-creates-adoption-barriers)
+    - [Hybrid Approaches Provide Practical Solutions](#hybrid-approaches-provide-practical-solutions)
+    - [The Functional-OOP Tension Amplifies Adoption Difficulty](#the-functional-oop-tension-amplifies-adoption-difficulty)
+    - [Vendor Lock-In Concerns Are Largely Psychological](#vendor-lock-in-concerns-are-largely-psychological)
+  - [Minimum Viable Agreements](#minimum-viable-agreements)
+  - [Addressing Vendor Lock-In](#addressing-vendor-lock-in)
+  - [Practical Guidelines in Brief](#practical-guidelines-in-brief)
+  - [Addressing Common Objections](#addressing-common-objections)
+  - [Future Directions](#future-directions)
+  - [Closing Thoughts](#closing-thoughts)
 
 ---
 
