@@ -2287,6 +2287,7 @@ The incremental adoption strategy succeeds by making CGP's challenges manageable
 The key insight is recognizing that successful adoption is less about mastering CGP's technical details than about building team experience with fission-driven thinking through practice. Developers learn to recognize opportunities for context splitting, to design focused abstractions, and to make informed decisions about when fission provides value over fusion. This learning happens through accumulated experience rather than intellectual understanding alone, which is why incremental adoption starting with small, low-risk refactorings proves more effective than ambitious wholesale conversion attempts.
 
 With the tactical execution strategy established, the next chapter synthesizes the report's findings into actionable recommendations. We examine the minimum viable agreements teams need before CGP adoption can succeed, address remaining concerns about framework dependency and lock-in, and identify the most promising directions for future development that could make fission-driven patterns more accessible to the broader Rust community.
+
 ---
 
 # Chapter 12: Conclusions and Recommendations
