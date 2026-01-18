@@ -1688,7 +1688,7 @@ The `SendEmailViaAws` provider implements email sending through AWS. Both `Produ
 
 This hybrid approach demonstrates the decision criteria: apply configurable dispatch when multiple contexts share implementations and benefit from the reuse. When an implementation is context-specific and unlikely to be shared, direct trait implementation provides a simpler solution that still enables context-generic code to call the trait methods uniformly across all contexts. Use blanket implementations when one implementation works for all contexts, use direct trait implementations when implementations are context-specific, and use configurable dispatch only when multiple implementations need to coexist and be reused across contexts.
 
-## Special Topic: Functional Programming Patterns
+# Special Topic: Functional Programming Patterns
 
 Beyond the core CGP patterns, an additional layer of complexity emerges when functional programming patterns are applied within the CGP framework. Higher-order providers—providers that accept other providers as generic parameters—enable powerful composition patterns but require developers to reason about multiple abstraction layers simultaneously. This complexity is entirely optional and can be avoided completely, but understanding it helps teams make informed decisions about when functional composition provides benefits worth its cognitive overhead.
 
@@ -1753,18 +1753,48 @@ where
 
 This provider accepts another provider as a generic parameter and delegates to it, scaling the result. The composition is expressed through type-level programming, producing specialized code at monomorphization time with no runtime overhead.
 
-The tension with object-oriented design preferences manifests clearly here. Object-oriented developers tend toward comprehensive interfaces grouping all related functionality:
+The tension with object-oriented design preferences manifests most clearly when working with comprehensive trait interfaces grouping all related functionality. Consider a monolithic `ShapeProvider` trait that encompasses area calculation, perimeter calculation, scaling, and rotation:
 
 ````rust
+#[cgp_component(ShapeProvider)]
 pub trait Shape {
     fn area(&self) -> f64;
     fn perimeter(&self) -> f64;
+    fn scale_factor(&self) -> f64;
     fn scale(&mut self, factor: f64);
     fn rotate(&mut self, angle: f64);
 }
 ````
 
-Higher-order providers that want to customize only area calculation must forward all other methods as pass-through boilerplate. The functional approach splits capabilities into focused traits:
+When implementing a higher-order provider like `ScaledArea` with this monolithic interface, the provider must forward all the methods it doesn't actually care about:
+
+````rust
+#[cgp_impl(new ScaledArea<InnerProvider>)]
+impl<Context, InnerProvider> ShapeProvider for Context
+where
+    InnerProvider: ShapeProvider<Context>,
+{
+    fn area(&self) -> f64 {
+        InnerProvider::scale_factor(self) * InnerProvider::area(self)
+    }
+
+    fn scale_factor(&self) -> f64 {
+        InnerProvider::scale_factor(self)
+    }
+
+    fn scale(&mut self, factor: f64) {
+        InnerProvider::scale(self, factor)
+    }
+
+    fn rotate(&mut self, angle: f64) {
+        InnerProvider::rotate(self, angle)
+    }
+}
+````
+
+The boilerplate here becomes immediately apparent. The `ScaledArea` provider only cares about area calculation—it multiplies the inner result by a scale factor. Yet it must implement `scale_factor`, `scale`, and `rotate` as simple pass-throughs to the inner provider, forwarding calls that have nothing to do with the provider's actual purpose. If the `ShapeProvider` trait gains additional methods, each higher-order provider must add corresponding forwarding methods despite never using them.
+
+This forwarding boilerplate represents the motivation for functional decomposition. Rather than grouping all shape-related operations into one trait, split them into focused interfaces:
 
 ````rust
 #[cgp_component(AreaCalculator)]
@@ -1776,13 +1806,45 @@ pub trait HasArea {
 pub trait HasPerimeter {
     fn perimeter(&self) -> f64;
 }
+
+#[cgp_auto_getter]
+pub trait HasScaleFactor {
+    fn scale_factor(&self) -> f64;
+}
+
+#[cgp_component(Scaler)]
+pub trait CanScale {
+    fn scale(&mut self, factor: f64);
+}
+
+#[cgp_component(Rotator)]
+pub trait CanRotate {
+    fn rotate(&mut self, angle: f64);
+}
 ````
 
-Now higher-order providers can be precisely targeted—a scaling provider only implements the area calculation it cares about without needing to know about perimeter, rotation, or future methods.
+Now the `ScaledArea` provider implementation becomes clean and precise:
 
-However, developers from OOP backgrounds often perceive this decomposition as fragmentation making APIs harder to discover and use. The learning curve for teams making this transition can be significant, requiring unlearning deeply ingrained assumptions about how abstractions should be structured. This represents a distinct adoption challenge beyond CGP's core patterns, explaining why some teams struggle even after mastering blanket implementations and getter traits.
+````rust
+#[cgp_impl(new ScaledArea<InnerCalculator>)]
+impl<Context, InnerCalculator> AreaCalculator for Context
+where
+    Context: HasScaleFactor,
+    InnerCalculator: AreaCalculator<Context>,
+{
+    fn area(&self) -> f64 {
+        InnerCalculator::area(self) * self.scale_factor()
+    }
+}
+````
 
-The practical implication: teams should approach higher-order providers cautiously, introducing them only when concrete composition needs emerge that simpler patterns cannot address. The majority of CGP usage can succeed with blanket implementations and basic provider traits without ever requiring higher-order composition.
+The provider implements only the area calculation it actually specializes, delegating the inner area through the inner provider and multiplying by the scale factor. No forwarding boilerplate obscures the actual purpose. A higher-order provider that wants to customize perimeter calculation would separately implement `PerimeterCalculator`, and a provider customizing rotation would implement `CanRotate`, with each implementation isolated to its specific concern.
+
+However, developers from object-oriented backgrounds often perceive this decomposition as fragmentation making APIs harder to discover and use. In object-oriented design, related methods are grouped together on classes precisely to facilitate discovery—all shape operations appear in one place where developers know to look. When these same operations scatter across multiple focused traits, developers must discover the different traits through documentation, type hints, or IDE navigation rather than seeing all available capabilities grouped under a single shape interface. The learning curve for teams making this transition can be significant, requiring unlearning deeply ingrained assumptions about how abstractions should be structured. What appears to functional programmers as elegant separation of concerns often appears to object-oriented developers as unnecessary fragmentation that makes code harder to use rather than easier to understand.
+
+This represents a distinct adoption challenge beyond CGP's core patterns, explaining why some teams struggle even after mastering blanket implementations and getter traits. The perception of fragmentation creates psychological resistance that technical arguments about reduced boilerplate and improved composition cannot entirely overcome. Teams must experience the benefits through concrete examples—seeing how focused traits eliminate forwarding boilerplate, how higher-order providers become simpler and more reusable, how new composition patterns emerge when capabilities are granularly separated—before they develop intuition that this decomposition provides value despite violating object-oriented design principles they internalized.
+
+The practical implication remains clear: teams should approach higher-order providers cautiously, introducing them only when concrete composition needs emerge that simpler patterns cannot address. The majority of CGP usage can succeed with blanket implementations and basic provider traits without ever requiring higher-order composition. When you do encounter scenarios where multiple providers need to decorate the same capability—such as scaling areas, caching query results, or wrapping operations with logging—that's when functional composition through focused traits and higher-order providers demonstrates clear advantages. But building a decomposed trait hierarchy speculatively hoping to enable future composition that never materializes creates unnecessary cognitive overhead without benefits. Wait until you actually need the flexibility before introducing the complexity that enables it.
 
 ## Conclusion: Strategic Complexity Management
 
