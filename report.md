@@ -1377,6 +1377,7 @@ where
 This approach eliminates duplication by writing the query logic once as a generic implementation. Both contexts automatically gain the capability by implementing the simple `HasDatabase` getter trait. The trade-off is introducing abstraction—code must now work with generic types and trait bounds rather than concrete types and direct field access.
 
 **Approach 3: Configurable Dispatch**
+
 ````rust
 #[cgp_component(UserQuerier)]
 pub trait CanGetUser {
@@ -1442,72 +1443,33 @@ Accepting CGP's primary complexity means accepting that in systems with genuine 
 
 ## Managing Secondary Complexity: A Strategic Framework
 
-Having accepted that supporting multiple contexts requires fundamental abstractions, we can now examine CGP's secondary complexities—abstract types, configurable dispatch, and getter traits—with clear understanding that these patterns are optional conveniences rather than unavoidable requirements. Each pattern solves specific problems that arise when writing context-generic code, but each can be selectively applied or avoided based on concrete needs. The key to managing secondary complexity is understanding when each pattern provides genuine value versus when simpler alternatives suffice.
+Having accepted that supporting multiple contexts requires fundamental abstractions, we can now examine CGP's secondary complexities—getter traits, abstract types, and configurable dispatch—with clear understanding that these patterns are optional conveniences rather than unavoidable requirements. Each pattern solves specific problems that arise when writing context-generic code, but each can be selectively applied or avoided based on concrete needs. The key to managing secondary complexity is understanding what problem each pattern actually solves and applying it only when that problem manifests in your specific codebase.
 
-### When to Use Each Pattern
+### Minimizing Getter Trait Complexity
 
-The decision about which patterns to employ should be driven by actual problems encountered rather than speculative future needs. Abstract types address type parameter proliferation when multiple related types need to vary together across contexts. Configurable dispatch enables multiple overlapping implementations to coexist when different contexts genuinely need different approaches to the same capability. Getter traits provide structural independence when contexts organize data differently but need to present uniform interfaces.
+Getter traits enable structural typing—enabling code to work with contexts that organize their data differently while presenting uniform interfaces. Rather than coupling business logic to specific field layouts, getter traits abstract over how values are obtained, allowing contexts to structure their internal data as needed while satisfying shared capability requirements. The benefit emerges most clearly when contexts have legitimate reasons for organizing data differently.
 
-**Abstract types become valuable** when you find yourself threading the same type parameters through many trait definitions and implementation blocks. Without abstract types, every trait depending on user-related types must explicitly specify parameters for user IDs, user objects, and potentially other related types. This creates visual noise and maintenance burden as these parameters must be updated everywhere when relationships change. If you're writing trait bounds like `Context: CanQueryUser<UserId, User> + CanUpdateUser<UserId, User> + CanDeleteUser<UserId, User>`, the repetition of `UserId` and `User` signals that abstract types would eliminate duplication.
+Consider a scenario where `ProductionApp` and `TestApp` organize their dependencies differently. Both need database access, but they differ in how they manage their API clients. The production context might directly contain a production API client that handles real AWS requests, while the test context might have a mock API client that returns predetermined responses. Both contexts need to provide the same user querying capability, but the structures differ:
 
-However, if your system consistently uses the same concrete types across all contexts—perhaps all contexts use `uuid::Uuid` for IDs and the same `User` struct from your domain model—then abstract types provide no benefit. The type relationships are already uniform; making them abstract only adds indirection without solving any actual problem.
-
-**Configurable dispatch becomes necessary** when multiple implementations of the same capability need to coexist and be selected per-context. The classic example is database operations that differ fundamentally between backends—PostgreSQL and SQLite require different SQL dialects, connection handling, and error processing. When `ProductionApp` needs PostgreSQL implementations and `TestApp` needs SQLite implementations of the same query operations, configurable dispatch provides the mechanism for selecting between them.
-
-But when all contexts can use identical implementations—as with the user querying example where the SQL and result processing remain the same regardless of which context executes them—configurable dispatch adds unnecessary machinery. A simple blanket trait implementation provides the same functionality with significantly less complexity. The question to ask: do different contexts genuinely need different implementations, or do they just need access to the same functionality?
-
-**Getter traits enable structural independence** when contexts organize their data differently but share business logic. If `ProductionApp` stores a database connection pool directly as a field while `TestApp` computes database connections on-demand from a factory, getter traits let the query logic remain identical despite these structural differences. The business logic accesses the database through the abstract `database()` method rather than assuming direct field access.
-
-Yet when all contexts share identical structure—all having a `database` field of the same type accessed the same way—the indirection of getter traits becomes unnecessary ceremony. Direct field access works fine and remains simpler to understand for developers unfamiliar with structural typing concepts.
-
-### Minimizing Abstract Type Complexity
-
-Abstract types introduce type-level indirection that transforms concrete type references into associated type lookups. When this indirection accumulates across multiple abstract types with complex relationships, readers must mentally trace through chains of delegation to understand what concrete types will actually be used. The strategy for minimizing this burden involves using fewer abstract types and grouping related types together when they genuinely vary as units.
-
-Consider a trait requiring multiple user-related types:
-
-````rust
-#[cgp_type]
-pub trait HasUserIdType {
-    type UserId: Clone + PartialEq;
+```rust
+#[derive(HasField)]
+pub struct ProductionApp {
+    pub database: Database,
+    pub api_client: ProductionApiClient,
+    pub cache: RedisCache,
 }
 
-#[cgp_type]
-pub trait HasUserType {
-    type User;
+#[derive(HasField)]
+pub struct TestApp {
+    pub database: Database,
+    pub api_client: MockApiClient,
+    pub verified_emails: Arc<Mutex<Vec<String>>>,
 }
+```
 
-pub trait CanQueryUser: HasUserIdType + HasUserType {
-    fn get_user(&self, user_id: &Self::UserId) -> Result<Self::User>;
-}
-````
+Without getter traits, the user querying implementation would need to account for these structural differences, perhaps through separate implementations for each context or through pattern matching over enum variants. Getter traits solve this elegantly by abstracting the access patterns:
 
-This design maximizes flexibility—contexts could theoretically provide different user ID types while sharing user types, or vice versa. But this flexibility likely provides no real benefit since user IDs and users form a conceptual unit where customizing one independently of the other makes little practical sense. Grouping them simplifies the model:
-
-````rust
-#[cgp_type]
-pub trait HasUserTypes {
-    type UserId: Clone + PartialEq;
-    type User;
-}
-
-pub trait CanQueryUser: HasUserTypes {
-    fn get_user(&self, user_id: &Self::UserId) -> Result<Self::User>;
-}
-````
-
-The grouped approach requires understanding only one abstract type trait rather than two, while still providing all necessary flexibility for contexts that genuinely need different user representations.
-
-The most effective minimization strategy is simply using fewer abstract types by keeping types concrete until concrete evidence emerges that abstraction provides value. If all your contexts use `uuid::Uuid` for user IDs, there's no benefit to making user IDs abstract. Wait until you actually need a context using a different ID format before introducing the abstraction.
-
-### Minimizing Configurable Dispatch Complexity
-
-Configurable dispatch through provider traits and component wiring represents CGP's most distinctive and most intimidating feature. The key insight often missed during initial adoption: configurable dispatch is frequently unnecessary. Many traits that appear in CGP codebases don't actually need the full machinery of provider traits and component wiring.
-
-Return to our user querying example. When all contexts use the same `Database` type and execute identical SQL queries, configurable dispatch provides no benefit:
-
-````rust
-// Blanket implementation - no providers needed
+```rust
 #[cgp_auto_getter]
 pub trait HasDatabase {
     fn database(&self) -> &Database;
@@ -1529,13 +1491,136 @@ where
         Ok(User::from_row(row))
     }
 }
-````
+```
 
-This blanket implementation automatically works with any context providing database access. No provider traits, no component wiring, no type-level lookup tables—just a straightforward generic implementation that satisfies all contexts through a simple dependency on `HasDatabase`.
+Both `ProductionApp` and `TestApp` implement the simple `HasDatabase` getter by returning a reference to their database field. The shared user querying logic works with both despite their different field organizations.
 
-Configurable dispatch becomes valuable only when multiple distinct implementations must coexist. Consider email sending where production contexts send real emails while test contexts record them for verification:
+However, the perception of magic when contexts derive `HasField` and automatically gain multiple getter trait implementations can generate resistance. The pragmatic response is implementing getters manually when automatic derivation feels uncomfortable, accepting the boilerplate as a learning aid:
 
-````rust
+```rust
+pub trait HasDatabase {
+    fn database(&self) -> &Database;
+}
+
+impl HasDatabase for ProductionApp {
+    fn database(&self) -> &Database {
+        &self.database
+    }
+}
+```
+
+This explicit implementation eliminates perception of magic—developers can see exactly where the `database()` method comes from when reading code or using IDE navigation. The implementation blocks serve as clear documentation of how getter traits are satisfied, and modifications follow standard Rust patterns without requiring understanding of macro-generated code. The trade-off is evident: manual implementations introduce boilerplate scaling linearly with getter traits and contexts. However, this boilerplate serves a pedagogical purpose during learning—when developers first encounter getter traits, seeing explicit implementations helps them understand that getters are simply standard Rust trait implementations with no special runtime behavior or hidden complexity.
+
+The key insight is recognizing that getter trait complexity is almost entirely about perceived magic rather than actual technical difficulty. Manual implementation eliminates the perception while maintaining all the benefits of structural typing—context-generic code can depend on capabilities rather than concrete field layouts, enabling code reuse across contexts with different structural organizations. For teams that have internalized structural typing concepts and are comfortable with automatic derivation, the `#[derive(HasField)]` and `#[cgp_auto_getter]` attributes provide significant convenience. For teams still building comfort, manual implementation provides a gentler on-ramp that trades some boilerplate for explicit clarity.
+
+### Minimizing Abstract Type Complexity
+
+Abstract types become valuable when the concrete type of values within a context changes depending on the context itself. Rather than threading type parameters everywhere, abstract types encapsulate type choices within contexts and make them accessible through associated types. This solves the specific problem of type parameter proliferation when types genuinely vary per-context.
+
+Consider a rectangle area calculation where the coordinate precision might differ depending on deployment constraints. A high-performance production context might use `f32` for speed, while a test context uses `f64` for precision, and a mobile context uses `f32` to minimize memory. Without abstract types, every trait working with scalar values must explicitly specify the precision as a generic parameter:
+
+```rust
+pub trait RectangleFields<Scalar: Num + Copy> {
+    fn width(&self) -> Scalar;
+    fn height(&self) -> Scalar;
+}
+
+pub trait RectangleArea<Scalar: Num + Copy> {
+    fn rectangle_area(&self) -> Scalar;
+}
+
+impl<Context, Scalar> RectangleArea<Scalar> for Context
+where
+    Scalar: Num + Copy,
+    Context: RectangleFields<Scalar>,
+{
+    fn rectangle_area(&self) -> Scalar {
+        self.width() * self.height()
+    }
+}
+```
+
+Every trait that depends on coordinate precision must be parameterized by `Scalar`, creating visual noise and maintenance burden. Adding a new coordinate type requirement forces updating trait bounds throughout the codebase. More problematically, traits that don't directly manipulate coordinates still get pulled into this parameterization if they depend on traits that do, creating what the report calls "viral propagation" of type parameters.
+
+Abstract types move these type choices into the context itself:
+
+```rust
+#[cgp_type]
+pub trait HasScalarType {
+    type Scalar: Num + Copy;
+}
+
+#[cgp_auto_getter]
+pub trait RectangleFields: HasScalarType {
+    fn width(&self) -> Self::Scalar;
+    fn height(&self) -> Self::Scalar;
+}
+
+pub trait RectangleArea: HasScalarType {
+    fn rectangle_area(&self) -> Self::Scalar;
+}
+
+impl<Context> RectangleArea for Context
+where
+    Context: RectangleFields,
+{
+    fn rectangle_area(&self) -> Self::Scalar {
+        self.width() * self.height()
+    }
+}
+```
+
+The transformation is dramatic. Traits declare only the abstract types they directly use through supertrait bounds, and implementation blocks no longer enumerate type parameters. The `RectangleArea` implementation can reference `Self::Scalar` without explicitly receiving it as a generic parameter. Traits working with rectangles but not directly manipulating scalars need not mention `Scalar` at all, eliminating the viral propagation that explicit parameters create.
+
+However, abstract types can themselves proliferate if you extract type choices prematurely or independently when they should be grouped. The most effective minimization strategy is using fewer abstract types by grouping related types that naturally vary together. Consider a trait requiring multiple user-related types: user IDs, user objects, and perhaps error types specific to user operations. Rather than creating separate abstract types for each, group them where they conceptually belong together:
+
+```rust
+#[cgp_type]
+pub trait HasUserTypes {
+    type UserId: Clone + PartialEq;
+    type User;
+}
+```
+
+This grouped approach requires understanding only one abstract type trait rather than three separate ones, while still providing all necessary flexibility for contexts that need different user representations. The decision criteria becomes clear: introduce abstract types when you observe type parameter pollution across multiple trait definitions and multiple contexts, not speculatively. Wait until threading the same type parameters through many trait bounds becomes genuinely burdensome before extracting them into abstract types.
+
+If all your contexts use `uuid::Uuid` for user IDs and the same `User` struct from your domain model, there is no benefit to making user IDs abstract—keep them concrete until you actually need a context using a different ID format.
+
+### Minimizing Configurable Dispatch Complexity
+
+Configurable dispatch through provider traits and component wiring represents CGP's most distinctive and most intimidating feature. The critical insight often missed during initial adoption is that configurable dispatch is frequently unnecessary. Many traits that appear in CGP codebases do not actually need the full machinery of provider traits and component wiring because they have only a single suitable implementation across all contexts.
+
+The decision about configurable dispatch complexity hinges on whether multiple distinct implementations of the same capability need to coexist. When all contexts can use identical implementations, configurable dispatch adds unnecessary machinery. Consider user querying where production and test environments execute identical SQL queries against different database instances. The query logic is deterministic: given a user ID, the query should be the same regardless of context. A simple blanket trait implementation provides the same functionality with significantly less complexity:
+
+```rust
+#[cgp_auto_getter]
+pub trait HasDatabase {
+    fn database(&self) -> &Database;
+}
+
+pub trait CanGetUser {
+    fn get_user(&self, user_id: &UserId) -> Result<User>;
+}
+
+impl<Context> CanGetUser for Context
+where
+    Context: HasDatabase,
+{
+    fn get_user(&self, user_id: &UserId) -> Result<User> {
+        let row = self.database().query_row(
+            "SELECT id, email, name FROM users WHERE id = $1",
+            &[user_id],
+        )?;
+        Ok(User::from_row(row))
+    }
+}
+```
+
+This blanket implementation automatically works with any context providing database access. No provider traits, no component wiring, no type-level lookup tables—just a straightforward generic implementation. Both production and test contexts gain the capability by implementing the simple `HasDatabase` getter trait, and when you fix bugs or add features, those changes automatically propagate to all contexts.
+
+Configurable dispatch becomes necessary only when multiple implementations of the same interface must coexist because different contexts genuinely need different approaches. Consider email sending where production contexts send real emails through AWS while test contexts record emails for verification. These are fundamentally different operations with different side effects and failure modes:
+
+```rust
 pub trait CanSendEmail {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
 }
@@ -1552,15 +1637,13 @@ impl CanSendEmail for TestApp {
         Ok(())
     }
 }
-````
+```
 
-For capabilities like this where implementations fundamentally differ, direct trait implementation on concrete contexts provides a simpler solution than configurable dispatch. Each context implements the trait directly using its specific approach, eliminating the provider machinery entirely while still enabling context-generic code to call `send_email` uniformly across both contexts.
+For capabilities like this where implementations genuinely differ, direct trait implementation on concrete contexts provides a simpler solution than configurable dispatch. Each context implements the trait directly using its specific approach. This eliminates the provider machinery entirely while still enabling context-generic code to call `send_email` uniformly across both contexts. The indirection through providers would only add cognitive overhead without enabling any new capabilities.
 
-Direct implementation works well when implementations are context-specific and unlikely to be reused. If `ProductionApp`'s email sending will only ever be used by `ProductionApp` and `TestApp`'s verification recording only by `TestApp`, there's no benefit to extracting these into separate provider types. The indirection through providers would only add cognitive overhead without enabling any new capabilities.
+However, configurable dispatch becomes valuable when implementations are reused across multiple contexts. Imagine that both production and staging environments need to send real emails through AWS, while development environments record emails for verification. The production and staging implementations are identical and benefit from sharing a single provider, avoiding duplication. In this scenario, extracting the shared AWS implementation into a separate provider and wiring it to both production and staging contexts eliminates duplication that would otherwise be maintained manually:
 
-Configurable dispatch becomes valuable when implementations are reused across multiple contexts. Consider email sending where production and staging environments both need to send real emails through AWS, while development environments record emails for verification. The production and staging implementations are identical and benefit from sharing a single provider, while the development implementation is unique and doesn't need the provider machinery:
-
-````rust
+```rust
 #[cgp_component(EmailSender)]
 pub trait CanSendEmail {
     fn send_email(&self, recipient: &EmailAddress, message: &str) -> Result<()>;
@@ -1582,10 +1665,13 @@ where
 }
 
 delegate_components! {
-    [
-        ProductionApp,
-        StagingApp,
-    ] {
+    ProductionApp {
+        EmailSenderComponent: SendEmailViaAws,
+    }
+}
+
+delegate_components! {
+    StagingApp {
         EmailSenderComponent: SendEmailViaAws,
     }
 }
@@ -1596,64 +1682,11 @@ impl CanSendEmail for DevelopmentApp {
         Ok(())
     }
 }
-````
+```
 
-The `SendEmailViaAws` provider implements email sending through AWS API calls. Both `ProductionApp` and `StagingApp` wire this provider through `delegate_components!`, using the array syntax to indicate that multiple contexts share the same implementation. This eliminates duplication—the AWS integration logic exists in one place and is wired to both contexts that need it.
+The `SendEmailViaAws` provider implements email sending through AWS. Both `ProductionApp` and `StagingApp` wire this provider through the array syntax in `delegate_components!`, indicating they share the same implementation. This eliminates duplication—the AWS integration logic exists in one place and is wired to both contexts needing it. Meanwhile, `DevelopmentApp` implements `CanSendEmail` directly since its email recording behavior is context-specific and will not be reused elsewhere.
 
-Meanwhile, `DevelopmentApp` implements `CanSendEmail` directly on the context itself. Since the development environment's email recording behavior is specific to that context and won't be reused elsewhere, there's no benefit to extracting it into a separate provider and wiring it through the component system. The direct implementation is simpler and more straightforward.
-
-This hybrid approach demonstrates the key decision criteria for configurable dispatch: apply it when multiple contexts share implementations and benefit from the reuse. When an implementation is context-specific and unlikely to be shared, direct trait implementation provides a simpler solution that still enables context-generic code to call the trait methods uniformly across all contexts. The configurable dispatch machinery pays for itself only when it enables concrete reuse across multiple contexts.
-
-The decision criteria becomes clear: use blanket implementations when one implementation works for all contexts, use direct trait implementations when implementations are context-specific, and use configurable dispatch only when multiple implementations need to coexist and be reused across contexts.
-
-### Minimizing Getter Trait Complexity
-
-Getter traits represent CGP's simplest pattern yet paradoxically generate significant resistance from developers who perceive them as introducing "magical" behavior obscuring straightforward field access. The discomfort stems not from technical implementation but from perceived automation—when contexts derive `HasField` and automatically gain multiple getter trait implementations without explicit implementation blocks, this can feel like the framework performs behind-the-scenes operations difficult to trace or understand.
-
-The pragmatic response to this discomfort is simply implementing getters manually when automatic derivation feels uncomfortable:
-
-````rust
-pub trait HasDatabase {
-    fn database(&self) -> &Database;
-}
-
-pub struct ProductionApp {
-    pub database: Database,
-    pub api_client: ProductionApiClient,
-}
-
-impl HasDatabase for ProductionApp {
-    fn database(&self) -> &Database {
-        &self.database
-    }
-}
-````
-
-This explicit implementation eliminates perception of magic—developers can see exactly where the `database()` method comes from when reading code or using IDE navigation. The implementation blocks serve as clear documentation of how getter traits are satisfied, and modifications follow standard Rust patterns without requiring understanding of macro-generated code.
-
-The trade-off is evident: manual implementations introduce significant boilerplate scaling linearly with getter traits and contexts. However, this boilerplate serves a pedagogical purpose during learning—when developers first encounter getter traits, seeing explicit implementations helps them understand that getters are simply standard Rust trait implementations with no special runtime behavior or hidden complexity.
-
-Manual implementation also provides flexibility for situations where automatic derivation is insufficient. Some getters may need to compute values rather than return direct references, access nested structures, or perform transformations:
-
-````rust
-pub trait HasDatabaseUrl {
-    fn database_url(&self) -> &str;
-}
-
-pub struct ProductionApp {
-    pub database_config: DatabaseConfig,
-}
-
-impl HasDatabaseUrl for ProductionApp {
-    fn database_url(&self) -> &str {
-        &self.database_config.url
-    }
-}
-````
-
-The key insight: getter trait complexity is almost entirely about perceived magic rather than actual technical difficulty. Manual implementation eliminates the perception while maintaining all the benefits of structural typing—context-generic code can depend on capabilities rather than concrete field layouts, enabling code reuse across contexts with different structural organizations.
-
-For teams that have internalized structural typing concepts and are comfortable with automatic derivation, the `#[derive(HasField)]` and `#[cgp_auto_getter]` attributes provide significant convenience. For teams still building comfort, manual implementation provides a gentler on-ramp that trades some boilerplate for explicit clarity.
+This hybrid approach demonstrates the decision criteria: apply configurable dispatch when multiple contexts share implementations and benefit from the reuse. When an implementation is context-specific and unlikely to be shared, direct trait implementation provides a simpler solution that still enables context-generic code to call the trait methods uniformly across all contexts. Use blanket implementations when one implementation works for all contexts, use direct trait implementations when implementations are context-specific, and use configurable dispatch only when multiple implementations need to coexist and be reused across contexts.
 
 ## Special Topic: Functional Programming Patterns
 
