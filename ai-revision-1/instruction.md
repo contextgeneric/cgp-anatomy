@@ -1,5 +1,15 @@
-Help me revise the report given in report-part-1.md.
+Follow the review suggestions in review.md to improve the given report.
 
-You should improve the wordings to be more engaging and better cater it to an audience with background in Rust development and PhD in programming languages. When there are redundant sentences mentioning the same points, reduce the redundancy and mention them once.
+Your main target audience are Rust developers who just learned about CGP and want to consider strategies to adopt CGP.
 
-After revising each chapter, stop and wait for further instruction.
+You writings should be highly engaging, detailed, and comprehensive. Your explanation should be in full sentences and avoid point forms.
+
+You should still include all content that have been written in the original report, just rearrange them differently or remove duplication according to the review. Include all code examples in the original report, unless they are duplication that are mentioned earlier already.
+
+Start by writing the revised executive summary and table content, then stop and wait for further instruction.
+
+When writing each chapter, do not use the chapter number of title of the original report. Instead refer to summary.md again as a recap of the revised summary and table of content.
+
+Before writing each chapter, write down detailed action items that list all the changes that you are going to make for that chapter based on the suggestions in review.md. If the review suggestion tells you to include content moved from other chapters, be sure to include that in your action list.
+
+After finishing every chapter, stop and wait for further instruction.
