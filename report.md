@@ -2,7 +2,7 @@
 
 Main author: Soares Chen
 
-Co author: Claude Sonnet 4.5
+Coauthor: Claude Sonnet 4.5
 
 # Executive Summary
 

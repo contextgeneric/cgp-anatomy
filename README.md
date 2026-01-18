@@ -1,6 +1,6 @@
 # The Anatomy of Context-Generic Programming: Understanding Fission-Driven Development in Rust
 
-## [Read the report](report.md)
+## [Read the report](report.md) [(PDF)](report.pdf)
 
 ## Overview
 
