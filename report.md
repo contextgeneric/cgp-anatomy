@@ -1781,7 +1781,41 @@ User querying executes identical SQL regardless of context. Both production and 
 
 Email sending, by contrast, involves **true variation**: production contexts invoke AWS APIs to send actual emails with all the complexity that entails—authentication, retry logic, rate limiting, error handling. Test contexts simply record email details to an in-memory log for later assertion. These aren't just different implementations of the same operation; they're fundamentally different operations with different failure modes, side effects, and purposes.
 
-This distinction drives our architectural decisions. For superficial variation like database backends, fusion techniques—generic parameters or enums—prevent context proliferation without sacrificing functionality. For true variation like email sending, fission techniques—separate contexts with direct trait implementations—preserve behavioral clarity and enable compile-time verification of which contexts can perform which operations.
+**However, it's crucial to recognize that this distinction is not absolute.** Whether variation qualifies as "superficial" or "true" depends heavily on project-specific factors rather than universal categories. The classification depends on several contextual considerations:
+
+**The number of variations actually needed** influences the assessment. If your project genuinely requires supporting five different database backends with subtly different SQL dialects and connection handling strategies, what initially appeared as superficial variation (database choice) may become true variation justifying separate implementations. Conversely, if you only ever need PostgreSQL and SQLite with identical query patterns, the variation remains superficial despite theoretically supporting different backends.
+
+**Whether variations must be mutually exclusive** at runtime affects the decision. Email sending represents true variation partly because production and test contexts cannot simultaneously send real emails and record them for verification—these are inherently exclusive behaviors. But if your project needs contexts that sometimes send real emails and sometimes mock them based on runtime configuration, the variation might become superficial enough to handle through a single configurable implementation rather than separate context types.
+
+**Compile-time optimization requirements** can elevate superficial variation to true variation. Database backends might execute identical queries, but if your performance-critical production context requires SIMD-optimized query processing while your test context prioritizes simplicity, this optimization difference transforms what seemed like superficial configuration into true behavioral variation deserving distinct implementations.
+
+**Project evolution expectations** matter significantly. Variation that currently appears superficial might become true variation as requirements evolve. If you anticipate that different database backends will eventually require fundamentally different query strategies—perhaps to leverage database-specific features or optimize for different performance characteristics—treating database choice as true variation from the start may prevent painful refactoring later.
+
+Consider how database backend choice might be classified differently depending on project context:
+
+```rust
+// Scenario 1: Database backends as superficial variation
+// All backends execute identical SQL, differ only in connection details
+pub struct Application<Database> {
+    pub database: Database,
+}
+
+// Scenario 2: Database backends as true variation
+// Different backends require fundamentally different query approaches
+pub struct PostgresApp {
+    pub database: PostgresDatabase,  // Uses advanced PostgreSQL features
+}
+
+pub struct SqliteApp {
+    pub database: SqliteDatabase,  // Uses SQLite-specific optimizations
+}
+```
+
+In the first scenario, the generic parameter appropriately contains variation that doesn't affect business logic. In the second scenario, separate context types acknowledge that PostgreSQL and SQLite implementations would diverge enough that shared code provides little value.
+
+**The framework provides guidance rather than rigid rules.** When evaluating whether variation in your project qualifies as superficial or true, ask yourself: Do different contexts genuinely need different implementations of this capability? Would forcing them to share an implementation require awkward conditionals or configuration complexity? Would separate implementations diverge significantly as the project evolves? Your answers to these project-specific questions should guide architectural decisions more than abstract categorization.
+
+This distinction—understood as context-dependent rather than absolute—drives our architectural decisions. For variation you assess as superficial given your project's needs, fusion techniques like generic parameters or enums prevent context proliferation without sacrificing functionality. For variation you determine is true based on your specific requirements, fission techniques like separate contexts with direct trait implementations preserve behavioral clarity and enable compile-time verification of which contexts can perform which operations.
 
 Let's see how this framework applies in practice, starting with the simplest integration: mixing blanket implementations with direct trait implementations.
 
@@ -2116,7 +2150,6 @@ This nuanced approach enables incremental adoption. Teams don't need to convert 
 5. Create separate context types only for dimensions representing true behavioral differences
 
 The next chapter builds on these integration strategies by providing concrete guidance for incremental adoption—how to identify specific refactoring candidates, execute precision extractions, and manage the gradual mindset transition required for successful CGP adoption. The integration patterns demonstrated here become the tools teams apply during that transition, enabling them to find their own balance between the cognitive simplicity of fusion and the code reuse benefits of fission.
-
 ---
 
 # Chapter 11: Incremental Adoption Strategy
