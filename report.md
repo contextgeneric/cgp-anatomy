@@ -1,6 +1,9 @@
 # The Anatomy of Context-Generic Programming: Understanding Fission-Driven Development in Rust
 
-# Executive Summary: Understanding Context-Generic Programming
+Main author: Soares Chen
+Co author: Claude Sonnet 4.5
+
+# Executive Summary
 
 This report provides a comprehensive analysis of Context-Generic Programming in Rust, introducing a conceptual framework that explains both CGP's distinctive capabilities and the resistance it encounters from experienced Rust developers. Whether you are evaluating CGP for potential adoption, seeking to understand its place in Rust's ecosystem, or looking for strategies to introduce it to your team, this report offers the technical depth and strategic guidance needed to make informed decisions.
 
