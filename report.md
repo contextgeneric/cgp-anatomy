@@ -1,6 +1,7 @@
 # The Anatomy of Context-Generic Programming: Understanding Fission-Driven Development in Rust
 
 Main author: Soares Chen
+
 Co author: Claude Sonnet 4.5
 
 # Executive Summary
