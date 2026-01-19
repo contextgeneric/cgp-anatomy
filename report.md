@@ -886,18 +886,21 @@ class Rectangle:
     def height(self):
         return self.height_value
 
-class Square:
-    def __init__(self, side):
-        self.side = side
+class RectangleIn2dSpace:
+    def __init__(self, width, height, x, y):
+        self.width_value = width
+        self.height_value = height
+        self.x = x
+        self.y = y
 
     def width(self):
-        return self.side
+        return self.width_value
 
     def height(self):
-        return self.side
+        return self.height_value
 ````
 
-The `calculate_area` function works with any object providing `width()` and `height()` methods, regardless of whether those objects share any declared type relationship. This enables trivial context splitting—new types can be introduced without modifying existing code or declaring conformance to any interface. The `Square` and `Rectangle` classes represent distinct contexts that share no common ancestor yet both work seamlessly with the area calculation function through structural compatibility alone.
+The `calculate_area` function works with any object providing `width()` and `height()` methods, regardless of whether those objects share any declared type relationship. This enables trivial context splitting—new types can be introduced without modifying existing code or declaring conformance to any interface. The `Rectangle` and `RectangleIn2dSpace` classes represent distinct contexts that share no common ancestor yet both work seamlessly with the area calculation function through structural compatibility alone.
 
 This effortless fission comes at a cost that explains why statically typed languages resist similar approaches. When `calculate_area` is called with an object lacking the required methods, the error manifests only at runtime when the missing method is invoked, potentially deep within a call stack far removed from the actual source of incompatibility. More problematically, reading the function reveals only that it calls `width()` and `height()` methods but provides no information about expected return types, whether these methods should accept parameters, or what exceptions they might raise. This opacity makes it difficult to reason about code correctness without extensive runtime testing.
 
@@ -989,15 +992,18 @@ public class Rectangle implements RectangleFields {
     }
 }
 
-public class Square implements RectangleFields {
-    private double side;
+public class RectangleIn2dSpace implements RectangleFields {
+    private double width;
+    private double height;
+    private double x;
+    private double y;
 
     public double width() {
-        return side;
+        return width;
     }
 
     public double height() {
-        return side;
+        return height;
     }
 }
 
@@ -1006,13 +1012,32 @@ public static double calculateArea(RectangleFields shape) {
 }
 ````
 
-The `RectangleFields` interface defines the contract that any rectangle-like type must satisfy, providing getter methods for width and height. The `calculateArea` function operates polymorphically on any object implementing this interface, enabling both `Rectangle` and `Square` to be used interchangeably without requiring a shared inheritance hierarchy.
+The `RectangleFields` interface defines the contract that any rectangle-like type must satisfy, providing getter methods for width and height. The `calculateArea` function operates polymorphically on any object implementing this interface, enabling both `Rectangle` and `RectangleIn2dSpace` to be used interchangeably without requiring a shared inheritance hierarchy.
+
+In Rust, trait objects provide the equivalent capability for runtime polymorphism. The same area calculation could be expressed using either `&dyn RectangleFields` for borrowed trait objects or `Box<dyn RectangleFields>` for owned trait objects:
+
+````rust
+pub trait RectangleFields {
+    fn width(&self) -> f64;
+    fn height(&self) -> f64;
+}
+
+pub fn calculate_area_borrowed(shape: &dyn RectangleFields) -> f64 {
+    shape.width() * shape.height()
+}
+
+pub fn calculate_area_owned(shape: Box<dyn RectangleFields>) -> f64 {
+    shape.width() * shape.height()
+}
+````
+
+The borrowed reference version `&dyn RectangleFields` works when the caller maintains ownership of the concrete object, while the owned box version `Box<dyn RectangleFields>` transfers ownership to the function. Both approaches enable callers to pass any type implementing `RectangleFields` regardless of their concrete type, providing the polymorphic flexibility similar to Java interfaces.
 
 ### The Limitations of Interface-Based Code Reuse
 
 This interface-based approach provides more flexibility than inheritance—a class can implement multiple interfaces, avoiding single inheritance limitations, and types can be retrofitted to satisfy interfaces after their original definition through adapter patterns or wrapper classes. However, interfaces share a critical weakness with Rust's `dyn` traits when applied to code reuse: they typically need to be implemented on concrete types through explicit implementation blocks.
 
-This requirement for concrete type implementation becomes particularly problematic when multiple types need to implement the same interface with identical or nearly identical logic. Consider expanding our example to include not just `Rectangle` and `Square`, but also a `RectangleIn2dSpace` that tracks position in addition to dimensions:
+This requirement for concrete type implementation becomes particularly problematic when multiple types need to implement the same interface with identical or nearly identical logic. Consider expanding our example to include not just `Rectangle` and `RectangleIn2dSpace`, but also needing area calculations across both. When both types implement `RectangleFields` with the same width and height logic, and when we want to provide the `HasArea` interface across different contexts:
 
 ````java
 public interface HasArea {
@@ -1066,25 +1091,9 @@ public class RectangleIn2dSpace implements HasArea {
         return width() * height();
     }
 }
-
-public class Circle implements HasArea {
-    private double radius;
-
-    public Circle(double radius) {
-        this.radius = radius;
-    }
-
-    public double radius() {
-        return radius;
-    }
-
-    public double area() {
-        return Math.PI * radius * radius;
-    }
-}
 ````
 
-Notice the critical limitation: `Rectangle` and `RectangleIn2dSpace` implement the `area()` method identically—both simply multiply width by height. Yet the interface mechanism provides no way to share this implementation. Each concrete type must write its own implementation block, even when the logic is completely identical. The `Circle` class legitimately needs a different implementation since circular area uses a different formula, but the duplication between `Rectangle` and `RectangleIn2dSpace` serves no purpose beyond satisfying Java's requirement that every type implementing an interface must provide all methods explicitly.
+Notice the critical limitation: `Rectangle` and `RectangleIn2dSpace` implement the `area()` method identically—both simply multiply width by height. Yet the interface mechanism provides no way to share this implementation. Each concrete type must write its own implementation block, even when the logic is completely identical. The `RectangleIn2dSpace` class legitimately differs from `Rectangle` in that it contains position information, yet the area calculation remains unchanged. But the interface mechanism forces duplication of identical logic across these two types.
 
 Unlike Rust's blanket trait implementations, which can provide default implementations for any type satisfying certain constraints, interface implementations in most object-oriented languages must be written for each concrete type individually. The primary mechanism for reusing interface implementations is through inheritance—defining a base class that implements the interface and having concrete types inherit from it. But this reintroduces all the limitations of inheritance-based approaches, creating tension where interfaces provide flexibility but don't solve the code duplication problem.
 
@@ -1094,7 +1103,7 @@ This fundamental limitation—that interfaces force explicit implementation for 
 
 Dynamic-typed languages address the interface implementation reuse problem through mixins—modules of reusable behavior that can be "mixed into" classes to provide implementation of certain methods. Mixins leverage duck typing to provide generic implementations that work with any class providing the required methods, directly solving the exact problem we encountered with Java interfaces.
 
-Consider how Ruby uses mixins to provide reusable area calculations that work with all three rectangle-related shapes:
+Consider how Ruby uses mixins to provide reusable area calculations that work with both rectangle-related shapes:
 
 ````ruby
 module AreaCalculation
@@ -1126,23 +1135,11 @@ class RectangleIn2dSpace
     @y = y
   end
 end
-
-class Circle
-  attr_reader :radius
-
-  def initialize(radius)
-    @radius = radius
-  end
-
-  def area
-    Math::PI * @radius * @radius
-  end
-end
 ````
 
-The `AreaCalculation` mixin defines the `area` method once, and this single implementation is automatically available to any class that includes it. Both `Rectangle` and `RectangleIn2dSpace` gain the `area` method by including the mixin, without needing to write duplicate implementations. The mixin implementation calls `width` and `height` methods, relying on duck typing to ensure these methods exist when `area` is invoked. The `Circle` class, by contrast, implements `area` directly since its implementation fundamentally differs.
+The `AreaCalculation` mixin defines the `area` method once, and this single implementation is automatically available to any class that includes it. Both `Rectangle` and `RectangleIn2dSpace` gain the `area` method by including the mixin, without needing to write duplicate implementations. The mixin implementation calls `width` and `height` methods, relying on duck typing to ensure these methods exist when `area` is invoked.
 
-This approach directly solves the duplication problem from Java. Recall that in Java, both `Rectangle` and `RectangleIn2dSpace` needed identical `area()` implementations but had no mechanism to share them without resorting to inheritance. In Ruby, they both include the mixin and share the single implementation automatically. The mixin approach recognizes that these two types have different data structures—`Rectangle` stores width and height as fields, `RectangleIn2dSpace` adds x and y position information—yet the area calculation remains identical. By abstracting over how width and height are obtained (through method calls), the mixin enables code reuse despite structural differences.
+This approach directly solves the duplication problem from Java. Recall that in Java, both `Rectangle` and `RectangleIn2dSpace` needed identical `area()` implementations but had no mechanism to share them without resorting to inheritance. In Ruby, they both include the mixin and share the single implementation automatically. The mixin approach recognizes that these two types have different data structures—`Rectangle` stores width and height as fields, `RectangleIn2dSpace` adds x and y position information—yet the area calculation remains identical. By abstracting over how width and height are obtained through method calls, the mixin enables code reuse despite structural differences.
 
 This approach works because Ruby's dynamic typing performs no compile-time verification that `width` and `height` methods exist. The mixin simply assumes these methods will be available at runtime, and errors only surface if the assumption is violated during execution. This runtime flexibility enables powerful code reuse patterns but sacrifices the static guarantees that typed languages provide.
 
@@ -1156,29 +1153,9 @@ This tension between compile-time verification and runtime flexibility defines t
 
 Providing mixin-like functionality in statically typed languages proves significantly more challenging because the type system must verify at compile time that a mixin's dependencies are satisfied. The compiler needs to ensure that any class incorporating a mixin actually provides the methods or fields that the mixin requires, creating a chicken-and-egg problem: how can the mixin reference methods that don't exist in the mixin's own definition?
 
-Some statically typed languages have experimented with mixin-like features:
+Some statically typed languages have experimented with mixin-like features. Scala's traits with concrete methods provide partial solutions by allowing traits to include default implementations that reference other trait methods. Classes mixing in these traits must implement the required abstract methods, giving them behavior similar to mixins. However, Scala's traits still require explicit trait mixing at the class definition site, limiting their flexibility compared to true mixins. TypeScript's mixins support mixing behavior into classes through special constructor patterns and intersection types, though TypeScript's gradual typing system means these mixins rely on structural subtyping and looser type checking that sacrifices some static guarantees.
 
-- **Scala's traits with concrete methods** provide partial solutions by allowing traits to include default implementations that reference other trait methods. Classes mixing in these traits must implement the required abstract methods, giving them behavior similar to mixins. However, Scala's traits still require explicit trait mixing at the class definition site, limiting their flexibility compared to true mixins.
-
-- **TypeScript's mixins** support mixing behavior into classes through special constructor patterns and intersection types. However, TypeScript's gradual typing system means these mixins rely on structural subtyping and looser type checking that sacrifices some static guarantees.
-
-- **Rust's blanket trait implementations** represent the closest static-typed equivalent to mixins, providing generic implementations for any type satisfying trait bounds. This is precisely what CGP builds upon and extends. Unlike Scala traits that require explicit mixing or TypeScript's runtime patterns, Rust blanket implementations apply automatically to any type satisfying the required trait bounds, providing the flexibility of mixins while maintaining compile-time verification.
-
-The fundamental challenge is that static type systems traditionally require explicit type relationships to be declared upfront, while mixins work best when they can be applied flexibly to any type providing compatible structure. Languages must choose between the safety of explicit typing and the flexibility of structural compatibility, and most static typed languages have historically prioritized safety.
-
-This tension explains why CGP's approach is valuable—it provides mixin-like code reuse in a statically typed context through Rust's trait system and blanket implementations, achieving compile-time verification while enabling flexible code composition. The exact problem that Ruby's mixins solve—enabling multiple types with different internal structures to share implementation logic—is precisely what CGP's blanket implementations accomplish, but with the added safety of compile-time verification that dependencies are satisfied.
-
-### Challenges in Static Typed Languages
-
-Providing mixin-like functionality in statically typed languages proves significantly more challenging because the type system must verify at compile time that a mixin's dependencies are satisfied. The compiler needs to ensure that any class incorporating a mixin actually provides the methods or fields that the mixin requires, creating a chicken-and-egg problem: how can the mixin reference methods that don't exist in the mixin's own definition?
-
-Some statically typed languages have experimented with mixin-like features:
-
-- **Scala's traits with concrete methods** provide partial solutions by allowing traits to include default implementations that reference other trait methods. Classes mixing in these traits must implement the required abstract methods, giving them behavior similar to mixins. However, Scala's traits still require explicit trait mixing at the class definition site, limiting their flexibility compared to true mixins.
-
-- **TypeScript's mixins** support mixing behavior into classes through special constructor patterns and intersection types. However, TypeScript's gradual typing system means these mixins rely on structural subtyping and looser type checking that sacrifices some static guarantees.
-
-- **Rust's blanket trait implementations** represent the closest static-typed equivalent to mixins, providing generic implementations for any type satisfying trait bounds. This is precisely what CGP builds upon and extends.
+Rust's blanket trait implementations represent the closest static-typed equivalent to mixins, providing generic implementations for any type satisfying trait bounds. This is precisely what CGP builds upon and extends. A blanket implementation automatically applies to any type satisfying the required trait bounds without needing explicit mixing at the type definition site, similar to how Ruby mixins automatically provide methods to including classes. The key difference is that Rust's type system verifies at compile time that types satisfy all bounds required by the blanket implementation, ensuring correctness without runtime errors.
 
 The fundamental challenge is that static type systems traditionally require explicit type relationships to be declared upfront, while mixins work best when they can be applied flexibly to any type providing compatible structure. Languages must choose between the safety of explicit typing and the flexibility of structural compatibility, and most static typed languages have historically prioritized safety.
 
@@ -1228,21 +1205,62 @@ fn spawn_rectangle(mut commands: Commands) {
 
 The same `calculate_rectangle_areas` system automatically operates on this entity because it has the required `Width`, `Height`, and `Area` components—the additional `Transform` component is simply ignored. This structural compatibility through runtime component inspection enables extremely flexible composition patterns where systems and entities can be combined freely without explicit type relationships.
 
-The power of reflection-based fission comes at substantial costs. Runtime type inspection, dynamic dispatch through reflection APIs, and inability to inline or optimize reflective operations introduce overhead that can be orders of magnitude slower than statically dispatched code. More insidiously, reflection sacrifices much of the type safety that static typing provides—when Bevy queries for entities with specific components, there exists no compile-time verification that such entities will actually exist at runtime or that the components have compatible types for the operations performed on them.
+The fundamental difference between reflection-based fission and CGP's approach emerges when we consider what type information the code accepts. Bevy's reflection-based approach ultimately requires accepting trait objects when working with reflected types. The equivalent rectangle area calculation using Rust's `bevy_reflect` crate would look fundamentally different from the component-based system. Rather than the generic `Query<(&Width, &Height, &mut Area)>` approach, reflection-based code working with arbitrary reflected contexts would need to accept something like `Box<dyn PartialReflect>`:
 
-Despite these significant limitations, reflection has proven valuable enough that many languages are expanding rather than contracting their reflection capabilities. The continued investment demonstrates that developers consistently encounter scenarios where fission-driven patterns enabled by reflection provide value that justifies the costs. In Bevy's case, the flexibility to compose game entities from arbitrary combinations of components and to write systems that work with any compatible entity structure enables architectural patterns that would be extremely difficult to achieve through purely static typing.
+````rust
+use bevy_reflect::Reflect;
+
+pub fn rectangle_area(context: Box<dyn Reflect>) -> Result<f64> {
+    let width = context
+        .get_field("width")
+        .and_then(|f| f.downcast_ref::<f64>())
+        .ok_or(Error::MissingWidth)?;
+
+    let height = context
+        .get_field("height")
+        .and_then(|f| f.downcast_ref::<f64>())
+        .ok_or(Error::MissingHeight)?;
+
+    Ok(width * height)
+}
+````
+
+This reflection-based approach fundamentally differs from what CGP enables. The function accepts a trait object—specifically a boxed trait object `Box<dyn Reflect>`—that enables dynamic type inspection at runtime. The function uses reflection methods like `get_field` to discover whether width and height fields exist, and `downcast_ref` to extract their values with type checking. If the reflected context lacks these fields or has fields of wrong types, errors surface only at runtime when these reflection calls fail.
+
+The contrast with CGP's approach is stark. Where reflection uses `Box<dyn Reflect>` trait objects accepting any reflected type with dynamic field lookup and downcasting, CGP uses explicit `Context` generic parameters with trait bounds enforcing static verification of available capabilities:
+
+````rust
+#[cgp_auto_getter]
+pub trait HasRectangleFields {
+    fn width(&self) -> f64;
+    fn height(&self) -> f64;
+}
+
+pub fn rectangle_area<Context>(context: &Context) -> Result<f64>
+where
+    Context: HasRectangleFields,
+{
+    Ok(context.width() * context.height())
+}
+````
+
+The CGP version declares what it needs upfront through trait bounds, and the compiler verifies at compile time that any context passed to the function implements these methods with correct signatures. No runtime field lookup, no dynamic downcasting, no possibility of discovering missing fields during execution—the compiler ensures correctness before the program runs.
+
+The power of reflection-based fission comes at substantial costs. Runtime type inspection, dynamic dispatch through reflection APIs, and inability to inline or optimize reflective operations introduce overhead that can be orders of magnitude slower than statically dispatched code. More insidiously, reflection sacrifices much of the type safety that static typing provides—when code dynamically queries for fields or methods, there exists no compile-time verification that such capabilities will actually be available at runtime or that the discovered types have compatible relationships for the operations performed on them.
+
+Despite these significant limitations, reflection has proven valuable enough that many languages continue expanding their reflection capabilities. The continued investment demonstrates that developers consistently encounter scenarios where fission-driven patterns enabled by reflection provide value that justifies the costs. In Bevy's case, the flexibility to compose game entities from arbitrary combinations of components and to write systems that work with any compatible entity structure enables architectural patterns that would be extremely difficult to achieve through purely static typing.
+
+However, Bevy's success comes partly from its component-based query system, which operates quite differently from pure reflection. By constraining flexibility through the component query syntax—requiring systems to declare exactly which components they need through query types—Bevy achieves verification closer to compile-time than pure reflection would provide, though still ultimately backed by runtime type inspection. This represents a pragmatic middle ground where reflection powers the underlying mechanism but structural constraints reduce the opportunity for runtime type errors.
 
 ## CGP's Unique Position in the Design Space
 
 Having surveyed fission-driven patterns across dynamic typing, object-oriented inheritance, interfaces with mixins, and runtime reflection, we can now articulate CGP's distinctive position within this landscape. CGP represents a unique combination of properties: it achieves fission-driven development through compile-time generic programming, providing zero-cost abstraction and strong type safety while enabling the extensibility and code reuse that characterizes fission patterns in other languages.
 
-The compile-time nature of CGP's polymorphism distinguishes it from all these alternative approaches. Where duck typing defers type checking to runtime, where inheritance requires vtable indirection, where mixins in dynamic languages rely on runtime method lookup, and where reflection performs dynamic type inspection, CGP performs all type resolution and dispatch during compilation. The monomorphization process generates specialized code for each concrete context that eliminates all abstraction overhead, producing machine code comparable in performance to hand-written implementations for specific types.
+The compile-time nature of CGP's polymorphism distinguishes it from all these alternative approaches. Where duck typing defers type checking to runtime, where inheritance requires vtable indirection, where mixins in dynamic languages rely on runtime method lookup, and where reflection performs dynamic type inspection and downcasting, CGP performs all type resolution and dispatch during compilation. The monomorphization process generates specialized code for each concrete context that eliminates all abstraction overhead, producing machine code comparable in performance to hand-written implementations for specific types.
 
-The strong type safety that CGP provides also sets it apart from alternatives that sacrifice static verification for flexibility. Unlike duck typing, where missing methods surface only at runtime, CGP verifies at compile time that all required trait bounds are satisfied. Unlike reflection, where component queries can fail dynamically if entities lack expected components, CGP ensures through getter traits and trait bounds that contexts provide required capabilities before code can execute. Unlike dynamic language mixins that assume methods exist through duck typing, CGP's blanket implementations are verified by the compiler to only apply to types that genuinely satisfy the required constraints.
+The strong type safety that CGP provides also sets it apart from alternatives that sacrifice static verification for flexibility. Unlike duck typing, where missing methods surface only at runtime, CGP verifies at compile time that all required trait bounds are satisfied. Unlike reflection-based approaches that dynamically look up fields and downcast values, CGP ensures through getter traits and trait bounds that contexts provide required capabilities before code can execute. Unlike dynamic language mixins that assume methods exist through duck typing, CGP's blanket implementations are verified by the compiler to only apply to types that genuinely satisfy the required constraints.
 
-The extensibility that CGP enables through its workaround of Rust's coherence restrictions represents another unique capability. While inheritance allows extending base classes through derivation, it cannot retroactively add existing types to new hierarchies without wrapper classes. Interface implementations in languages like Java must be written for each concrete type, preventing the kind of blanket implementations that CGP enables. CGP allows defining new providers for existing consumer traits, implementing providers that work with arbitrary contexts satisfying trait bounds, and wiring implementations to contexts without modifying trait definitions or context definitions. This open-world extensibility makes CGP particularly valuable for library ecosystems where third-party code needs to integrate seamlessly with existing abstractions.
-
-The comparison with mixins is particularly illuminating. Dynamic language mixins achieve code reuse similar to CGP's blanket implementations, but do so through runtime duck typing that sacrifices static verification. Scala's traits with concrete methods provide compile-time verification but require explicit mixing at the type definition site, lacking the flexibility of CGP's blanket implementations that automatically apply to any type satisfying trait bounds. CGP essentially brings the code reuse benefits of mixins to Rust's statically typed context while maintaining compile-time verification and zero-cost abstraction.
+The extensibility that CGP enables through its workaround of Rust's coherence restrictions represents another unique capability. While inheritance allows extending base classes through derivation, it cannot retroactively add existing types to new hierarchies without wrapper classes. Interface implementations in languages like Java must be written for each concrete type, preventing the kind of blanket implementations that CGP enables. Reflection-based approaches can work with any type but sacrifice compile-time verification in doing so. CGP allows defining new providers for existing consumer traits, implementing providers that work with arbitrary contexts satisfying trait bounds, and wiring implementations to contexts without modifying trait definitions or context definitions. This open-world extensibility makes CGP particularly valuable for library ecosystems where third-party code needs to integrate seamlessly with existing abstractions while maintaining full compile-time type safety.
 
 Understanding CGP's position within the broader landscape of fission-driven patterns provides important perspective for adoption decisions. CGP does not introduce fission-driven development to programming—developers across language ecosystems have been successfully using fission patterns for decades through various mechanisms. What CGP provides is a way to achieve fission in Rust while respecting the language's core values of zero-cost abstraction, memory safety, and compile-time verification. The patterns that developers want to express—code reuse across multiple contexts, extensibility, structural typing, mixin-like composition—are not exotic desires but rather established practices that happen to be underserved by Rust's fusion-centric culture.
 
