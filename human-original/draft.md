@@ -988,6 +988,8 @@ With such degree of inflexibility, one could reasonably argue that it might have
 
 As we can see, the main issue with monolithic traits is that it subtly increases the fusion property of the code, even though the code is written in a context-generic style. This is because the developer is still in a fusion-driven mindset when writing fission-driven code.
 
+Even though functional composition and single-method traits are powerful, teams should be mindful in adopting functional programming patterns, to ease the burden of adopting CGP for developers coming from OOP background.
+
 ## Fusion-Fission Hybrids
 
 ### Use of Fusion-Driven techniques with CGP
